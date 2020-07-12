@@ -11,12 +11,22 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ClothSimulation.cpp" />
+    <ClCompile Include="ClothModel.cpp" />
+    <ClCompile Include="ClothSample.cpp" />
+    <ClCompile Include="External\HalfEdge\trimesh.cpp" />
+    <ClCompile Include="FiniteElementsMethod.cpp" />
+    <ClCompile Include="ParticleSpringModel.cpp" />
     <ClCompile Include="TriangleIntersection.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="ClothSimulation.h" />
+    <ClInclude Include="ClothModel.h" />
+    <ClInclude Include="ClothSample.h" />
+    <ClInclude Include="External\HalfEdge\trimesh.h" />
+    <ClInclude Include="External\HalfEdge\trimesh_types.h" />
+    <ClInclude Include="FiniteElementsMethod.h" />
+    <ClInclude Include="ParticleSpringModel.h" />
     <ClInclude Include="TriangleIntersection.h" />
+    <ClInclude Include="Utils.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="C:\Users\dimit\Desktop\Falcor-3.2.1\Framework\Source\Falcor.vcxproj">
@@ -82,6 +92,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\dimit\source\repos\ClothSimulation\External\eigen\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

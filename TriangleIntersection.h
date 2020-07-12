@@ -10,6 +10,6 @@
 #include <algorithm>
 #include "glm/glm.hpp"
 
-bool intersectTriangles(glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response);
-bool intersectTriangle(glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection);
-bool intersectTriangle(glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection, glm::vec3 &intersection);
+bool intersectTriangles(const glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response);
+bool intersectTriangle(const glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection);
+bool intersectTriangle(const glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection, glm::vec3 &intersection);

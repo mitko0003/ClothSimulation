@@ -27,48 +27,12 @@
 ***************************************************************************/
 #pragma once
 #include "Falcor.h"
+#include "ParticleSpringModel.h"
+#include "FiniteElementsMethod.h"
 
 using namespace Falcor;
 
-class NonCopyable
-{
-public:
-    NonCopyable() = default;
-    NonCopyable(const NonCopyable&) = delete;
-    NonCopyable& operator=(const NonCopyable&) = delete;
-};
-
-struct ClothParticle
-{
-    float3 mPosition;
-    float3 mPrevPosition;
-    float3 mAcceleration;
-    bool mbStationary;
-};
-
-struct ClothPatch : NonCopyable
-{
-    ClothParticle *mpParticles;
-    int32_t mWidth;
-    int32_t mHeight;
-    float32 mMass;
-
-    ClothPatch() :
-        mpParticles(nullptr),
-        mWidth(0),
-        mHeight(0),
-        mMass(7.0f) {}
-
-    ~ClothPatch()
-    {
-        delete[] mpParticles;
-    }
-
-    void init(int32_t width, int32_t height);
-    ClothParticle* getParticle(int32_t x, int32_t y);
-};
-
-class ProjectTemplate : public Renderer
+class ClothSample : public Renderer
 {
 public:
     void onLoad(SampleCallbacks* pSample, RenderContext* pRenderContext) override;
@@ -80,48 +44,22 @@ public:
     void onDataReload(SampleCallbacks* pSample) override;
     void onGuiRender(SampleCallbacks* pSample, Gui* pGui) override;
 
+	Camera::SharedPtr mpCamera;
+	DirectionalLight::SharedPtr mpDirLight;
 private:
-    static const char *ClothVS;
-    static const char *ClothPS;
     static const char *ModelPS;
 
     static const char *SkyBoxTextures[];
 
-    static const char *ModelUnitSphere;
-    static const char *ModelUnitCylinder;
-    static const char *ModelUnitCone;
-
-    static const int32_t ClothSizeX;
-    static const int32_t ClothSizeY;
-
-    GraphicsProgram::SharedPtr mpClothProgram;
-    GraphicsVars::SharedPtr mpClothVars;
-    GraphicsState::SharedPtr mpClothState;
-
-    RasterizerState::SharedPtr mpRasterizeNormal;
-    RasterizerState::SharedPtr mpRasterizeWireframe;
+	static const int32_t ClothSizeX;
+	static const int32_t ClothSizeY;
 
     GraphicsProgram::SharedPtr mpModelProgram;
     GraphicsVars::SharedPtr mpModelVars;
     GraphicsState::SharedPtr mpModelState;
 
-    Buffer::SharedPtr mpVBPositions;
-    Buffer::SharedPtr mpVBNormals;
-    Buffer::SharedPtr mpVBColors;
-    Buffer::SharedPtr mpIndexBuffer;
-    Vao::SharedPtr mpVao;
-
-    Camera::SharedPtr mpCamera;
-    Scene::SharedPtr mpScene;
-    SceneRenderer::SharedPtr mpSceneRenderer;
-    DirectionalLight::SharedPtr mpDirLight;
-
     SkyBox::SharedPtr mpSkybox;
     Sampler::SharedPtr mpTriLinearSampler;
-
-    Model::SharedPtr mpUnitSphere;
-    Model::SharedPtr mpUnitCylinder;
-    Model::SharedPtr mpUnitCone;
 
     enum
     {
@@ -136,19 +74,10 @@ private:
 
     CameraController& getActiveCameraController();
 
-    bool mbShowParticles;
-    bool mbShowWireframe;
     glm::vec3 mLightDirection;
-
-    float32 mAirTemperature;
-    ClothParticle *mHeldParticle;
+	float32 mAirTemperature;
 
     float mPrevTime;
     ClothPatch mClothPatch;
-
-    struct ParticleDbgModels
-    {
-        Scene::ModelInstance::SharedPtr pUnitSphere;
-        Scene::ModelInstance::SharedPtr pUnitCylinder;
-    } *mpParticleDbgModels;
+    FiniteElementsMethod mFEMPatch;
 };

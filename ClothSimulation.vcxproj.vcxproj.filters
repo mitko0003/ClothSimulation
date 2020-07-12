@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="ParticleSpringModel.cpp" />
+    <ClCompile Include="TriangleIntersection.cpp" />
+    <ClCompile Include="External\HalfEdge\trimesh.cpp">
+      <Filter>External\HalfEdge</Filter>
+    </ClCompile>
+    <ClCompile Include="FiniteElementsMethod.cpp" />
+    <ClCompile Include="ClothModel.cpp" />
+    <ClCompile Include="ClothSample.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ParticleSpringModel.h" />
+    <ClInclude Include="TriangleIntersection.h" />
+    <ClInclude Include="Utils.h" />
+    <ClInclude Include="External\HalfEdge\trimesh.h">
+      <Filter>External\HalfEdge</Filter>
+    </ClInclude>
+    <ClInclude Include="External\HalfEdge\trimesh_types.h">
+      <Filter>External\HalfEdge</Filter>
+    </ClInclude>
+    <ClInclude Include="FiniteElementsMethod.h" />
+    <ClInclude Include="ClothModel.h" />
+    <ClInclude Include="ClothSample.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="External">
+      <UniqueIdentifier>{7603767d-ae77-4214-b682-02de896a0b11}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="External\HalfEdge">
+      <UniqueIdentifier>{9f46e1eb-1963-417f-acc0-611efb4f1c32}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

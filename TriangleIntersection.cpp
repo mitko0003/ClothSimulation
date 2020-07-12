@@ -7,7 +7,7 @@
 
 #include "TriangleIntersection.h"
 
-static bool intersects(glm::vec3 U[3], glm::vec3 V[3], glm::vec3 segment[2], glm::vec3 &response)
+static bool intersects(const glm::vec3 U[3], const glm::vec3 V[3], glm::vec3 segment[2], glm::vec3 &response)
 {
     // Compute the plane normal for triangle U.
     glm::vec3 edge1 = U[1] - U[0];
@@ -121,7 +121,7 @@ static bool intersects(glm::vec3 U[3], glm::vec3 V[3], glm::vec3 segment[2], glm
 }
 
 // TODO(doc): Eberly, David H - GPGPU Programming for Games and Science-CRC Press (2014).pdf
-bool intersectTriangles(glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response)
+bool intersectTriangles(const glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response)
 {
     glm::vec3 S0[2], S1[2];
     glm::vec3 R0, R1;
@@ -153,7 +153,7 @@ bool intersectTriangles(glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response)
 
 // Möller–Trumbore ray-triangle intersection algorithm
 // TODO(doc): https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/moller-trumbore-ray-triangle-intersection
-bool intersectTriangle(glm::vec3 vertices[3], glm::vec3 rayOrigin, glm::vec3 rayDirection, glm::vec3 &intersection)
+bool intersectTriangle(const glm::vec3 vertices[3], glm::vec3 rayOrigin, glm::vec3 rayDirection, glm::vec3 &intersection)
 {
     const auto edge1 = vertices[1] - vertices[0];
     const auto edge2 = vertices[2] - vertices[0];
