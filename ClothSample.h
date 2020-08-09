@@ -27,8 +27,7 @@
 ***************************************************************************/
 #pragma once
 #include "Falcor.h"
-#include "ParticleSpringModel.h"
-#include "FiniteElementsMethod.h"
+#include "ClothModel.h"
 
 using namespace Falcor;
 
@@ -46,17 +45,25 @@ public:
 
 	Camera::SharedPtr mpCamera;
 	DirectionalLight::SharedPtr mpDirLight;
+
+	GraphicsProgram::SharedPtr mpModelProgram;
+	GraphicsVars::SharedPtr mpModelVars;
+	GraphicsState::SharedPtr mpModelState;
+
+	Model::SharedPtr mpDbgUnitSphere;
+	Model::SharedPtr mpDbgUnitCylinder;
+	Model::SharedPtr mpDbgUnitCone;
+
 private:
     static const char *ModelPS;
+	static const char *ModelUnitSphere;
+	static const char *ModelUnitCylinder;
+	static const char *ModelUnitCone;
 
     static const char *SkyBoxTextures[];
 
 	static const int32_t ClothSizeX;
 	static const int32_t ClothSizeY;
-
-    GraphicsProgram::SharedPtr mpModelProgram;
-    GraphicsVars::SharedPtr mpModelVars;
-    GraphicsState::SharedPtr mpModelState;
 
     SkyBox::SharedPtr mpSkybox;
     Sampler::SharedPtr mpTriLinearSampler;
@@ -78,6 +85,7 @@ private:
 	float32 mAirTemperature;
 
     float mPrevTime;
-    ClothPatch mClothPatch;
-    FiniteElementsMethod mFEMPatch;
+
+	ClothModel::EType mClothModel;
+    ClothModel *mClothPatch;
 };

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <set>
 #include <iostream>
+#include <algorithm>
 
 namespace
 {
@@ -30,7 +31,7 @@ trimesh::trimesh_t::index_t directed_edge2face_index( const directed_edge2index_
 namespace trimesh
 {
 
-void trimesh_t::build( const unsigned long num_vertices, const unsigned long num_triangles, const triangle_t* triangles, const unsigned long num_edges, const edge_t* edges )
+void trimesh_t::build( const int num_vertices, const int num_triangles, const triangle_t* triangles, const int num_edges, const edge_t* edges )
 {
     /*
     Generates all half edge data structures for the mesh given by its vertices 'self.vs'
@@ -62,11 +63,11 @@ void trimesh_t::build( const unsigned long num_vertices, const unsigned long num
         const edge_t& edge = edges[ei];
         
         // Add the halfedge_t structures to the end of the list.
-        const index_t he0index = m_halfedges.size();
+        const index_t he0index = index_t(m_halfedges.size());
         m_halfedges.push_back( halfedge_t() );
         halfedge_t& he0 = m_halfedges.back();
         
-        const index_t he1index = m_halfedges.size();
+        const index_t he1index = index_t(m_halfedges.size());
         m_halfedges.push_back( halfedge_t() );
         halfedge_t& he1 = m_halfedges.back();
         
@@ -232,7 +233,7 @@ std::vector< std::pair< trimesh_t::index_t, trimesh_t::index_t > > trimesh_t::bo
     return result;
 }
 
-void unordered_edges_from_triangles( const unsigned long num_triangles, const triangle_t* triangles, std::vector< edge_t >& edges_out )
+void unordered_edges_from_triangles( const int num_triangles, const triangle_t* triangles, std::vector< edge_t >& edges_out )
 {
     typedef std::set< std::pair< index_t, index_t > > edge_set_t;
     edge_set_t edges;

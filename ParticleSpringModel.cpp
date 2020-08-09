@@ -1,17 +1,65 @@
-#include "ClothSample.h"
-#include "ParticleSpringModel.h"
+#include "External/HalfEdge/trimesh.h"
+
 #include "TriangleIntersection.h"
+#include "ClothSample.h"
 
 using float1 = float32_t;
 using float3 = f32vec3;
 
-const char *ClothPatch::ClothVS = "Cloth.vs.hlsl";
-const char *ClothPatch::ClothPS = "Cloth.ps.hlsl";
+struct ClothParticle
+{
+	float3 mPosition;
+	float3 mPrevPosition;
+	float3 mAcceleration;
+	bool mbStationary;
+};
+
+struct ClothPatch : public ClothModel
+{
+	ClothParticle *mpParticles;
+	int32_t mWidth;
+	int32_t mHeight;
+	float32 mMass;
+
+	ClothParticle *mHeldParticle;
+	float32 mAirTemperature;
+
+	ClothPatch() :
+		mHeldParticle(nullptr),
+		mpParticles(nullptr),
+		mWidth(0),
+		mHeight(0),
+		mMass(7.0f)
+	{
+		mName = "Varlet Cloth Patch";
+	}
+
+	~ClothPatch()
+	{
+		delete[] mpParticles;
+	}
+
+	ClothParticle* getParticle(int32_t x, int32_t y);
+	vec3 getVertexPosition(int32 vertexIndex) const final override;
+
+	EType getType() const final override
+	{
+		return EType::ParticleSpringModel;
+	}
+
+	void init(int32_t width, int32_t height) final override;
+	void init(const Model *model) final override;
+	void simulate(float deltaTime) final override;
+	void render(ClothSample*, SampleCallbacks*) final override;
+
+	void onGuiRender(ClothSample*, SampleCallbacks*) final override;
+	bool onMouseEvent(ClothSample*, SampleCallbacks*, const MouseEvent&) final override;
+};
 
 void ClothPatch::init(int32_t width, int32_t height)
 {
 	std::vector<float3> positions;
-	const auto vertexCount = createRectMesh(width, height, positions, triangles, mesh);
+	const auto vertexCount = createRectMesh(width, height, positions, mTriangles, mMesh);
 
 	mWidth = width;
 	mHeight = height;
@@ -26,79 +74,13 @@ void ClothPatch::init(int32_t width, int32_t height)
 		particle.mPrevPosition = particle.mPosition;
 	}
 
-	mpVBPositions = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
-	mpVBNormals = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
-	mpVBColors = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
-
-	std::vector<uint16_t> vIndices;
-	for (const auto &triangle : triangles)
-	{
-		vIndices.emplace_back(uint16_t(triangle.v[0]));
-		vIndices.emplace_back(uint16_t(triangle.v[1]));
-		vIndices.emplace_back(uint16_t(triangle.v[2]));
-	}
-	mpIndexBuffer = Buffer::create(vIndices.size() * sizeof(uint16_t), ResourceBindFlags::Index, Buffer::CpuAccess::None, vIndices.data());
-
-	VertexLayout::SharedPtr pLayout = VertexLayout::create();
-	VertexBufferLayout::SharedPtr pPositionsLayout = VertexBufferLayout::create();
-	pPositionsLayout->addElement("POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
-	pLayout->addBufferLayout(0, pPositionsLayout);
-	VertexBufferLayout::SharedPtr pNormalsLayout = VertexBufferLayout::create();
-	pNormalsLayout->addElement("NORMAL", 0, ResourceFormat::RGB32Float, 1, 1);
-	pLayout->addBufferLayout(1, pNormalsLayout);
-	VertexBufferLayout::SharedPtr pColorsLayout = VertexBufferLayout::create();
-	pColorsLayout->addElement("COLOR", 0, ResourceFormat::RGB32Float, 1, 2);
-	pLayout->addBufferLayout(2, pColorsLayout);
-
-	Vao::BufferVec buffers{ mpVBPositions, mpVBNormals, mpVBColors };
-	mpVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers, mpIndexBuffer, ResourceFormat::R16Uint);
-
-	Program::DefineList defineList;
-
-	GraphicsProgram::Desc clothProgramDesc;
-	clothProgramDesc.addShaderLibrary(ClothVS).vsEntry("main");
-	clothProgramDesc.addShaderLibrary(ClothPS).psEntry("main");
-	mpClothProgram = GraphicsProgram::create(clothProgramDesc, defineList);
-	mpClothVars = GraphicsVars::create(mpClothProgram->getReflector());
-	mpClothState = GraphicsState::create();
-
-	RasterizerState::Desc rasterizerDesc;
-	rasterizerDesc.setCullMode(RasterizerState::CullMode::None);
-	rasterizerDesc.setFillMode(RasterizerState::FillMode::Solid);
-	mpRasterizeNormal = RasterizerState::create(rasterizerDesc);
-	rasterizerDesc.setFillMode(RasterizerState::FillMode::Wireframe);
-	mpRasterizeWireframe = RasterizerState::create(rasterizerDesc);
-
-	mpClothState->setProgram(mpClothProgram);
-	mpClothState->setVao(mpVao);
-
-	auto pUnitSphere = Model::createFromFile(ModelUnitSphere, Model::LoadFlags::None);
-	auto pUnitCylinder = Model::createFromFile(ModelUnitCylinder, Model::LoadFlags::None);
-	auto pUnitCone = Model::createFromFile(ModelUnitCone, Model::LoadFlags::None);
-
-	mpDbgScene = Scene::create();
-	mpDbgSceneRenderer = SceneRenderer::create(mpDbgScene);
-
-	for (int32_t y = 0; y < mHeight; ++y)
-	{
-		for (int32_t x = 0; x < mWidth; ++x)
-		{
-			auto pParticle = getParticle(x, y);
-
-			pParticle->pDbgUnitSphere = Scene::ModelInstance::create(pUnitSphere, pParticle->mPosition, vec3(0.0f), vec3(0.001f));
-			pParticle->pDbgUnitSphere->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
-			mpDbgScene->addModelInstance(pParticle->pDbgUnitSphere);
-
-			pParticle->pDbgUnitCylinder = Scene::ModelInstance::create(pUnitCylinder, pParticle->mPosition, vec3(0.0f), vec3(0.1f));
-			pParticle->pDbgUnitCylinder->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
-			mpDbgScene->addModelInstance(pParticle->pDbgUnitCylinder);
-
-			// TODO: add cone to the end of cylinder
-		}
-	}
+	getParticle(0, 0)->mbStationary = true;
+	getParticle(width - 1, 0)->mbStationary = true;
+	
+	sharedInit();
 }
 
-void init(const Model*)
+void ClothPatch::init(const Model*)
 {
 	assert(!"Not implemented!");
 }
@@ -106,6 +88,11 @@ void init(const Model*)
 ClothParticle* ClothPatch::getParticle(int32_t x, int32_t y)
 {
 	return &mpParticles[y * mWidth + x];
+}
+
+vec3 ClothPatch::getVertexPosition(int32 vertexIndex) const
+{
+	return mpParticles[vertexIndex].mPosition;
 }
 
 static constexpr struct
@@ -159,7 +146,7 @@ void ClothPatch::simulate(float deltaTime)
 	const auto area = 1.0f;
 	const auto airDensity = GetAirDensity(mAirTemperature);
 
-	const auto windAcceleration = float3(3.0f, 0.0f, 3.0f) / mMass;
+	const auto windAcceleration = float3(3.0f, 0.0f, 3.0f) / mMass; // TODO: Take into account mMaterialDensity
 	const auto gravityAcceleration = float3(0.0f, -9.8067f, 0.0f);
 
 	for (int32_t y = 0; y < mHeight; ++y)
@@ -173,7 +160,7 @@ void ClothPatch::simulate(float deltaTime)
 			const auto velocity = particle->mPosition - particle->mPrevPosition;
 
 			const auto dragForce = 0.5f * airDensity * dragCoefficient * area * (velocity * velocity);
-			const auto dragAcceleration = dragForce * mMass;
+			const auto dragAcceleration = dragForce * mMass; // TODO: Take into account mMaterialDensity
 
 			const auto acceleration = gravityAcceleration + windAcceleration /*+ dragAcceleration*/;
 
@@ -236,208 +223,53 @@ void ClothPatch::simulate(float deltaTime)
 
 void ClothPatch::render(ClothSample *pClothSample, SampleCallbacks *pSample)
 {
+	ClothModel::render(pClothSample, pSample);
+
 	const auto currTime = pSample->getCurrentTime();
 	auto *pRenderContext = pSample->getRenderContext();
 	const auto &pTargetFbo = pSample->getCurrentFbo();
 
-	float32_t *pPositions = reinterpret_cast<float32_t*>(mpVBPositions->map(Buffer::MapType::WriteDiscard));
-	float32_t *pNormals = reinterpret_cast<float32_t*>(mpVBNormals->map(Buffer::MapType::WriteDiscard));
-	for (int32_t y = 0; y < mHeight; ++y)
-	{
-		for (int32_t x = 0; x < mWidth; ++x)
-		{
-			const auto *particle = getParticle(x, y);
-			auto *position = pPositions + (y * mWidth + x) * 3;
-
-			position[0] = particle->mPosition[0];
-			position[1] = particle->mPosition[1];
-			position[2] = particle->mPosition[2];
-
-			// TODO: Fit a plane to the particles' position and use its normal
-
-			// Normal sampling pattern:
-			// *  *  *
-			//   /|\
-            //  /4|3\
-            // *__*__*
-			//  \1|2/
-			//   \|/
-			// *  *  *
-
-			const int32_t NormalSamples[][3][2] =
-			{
-				{ { -1,  0 }, {  0,  0 }, {  0,  1 } }, // 1
-				{ {  0,  1 }, {  0,  0 }, {  1,  0 } }, // 2
-				{ {  1,  0 }, {  0,  0 }, {  0, -1 } }, // 3
-				{ {  0, -1 }, {  0,  0 }, { -1,  0 } }, // 4
-			};
-
-			const auto &GetParticleSample = [&](const int32_t(&offset)[2]) -> float3 {
-
-				int32_t x1 = glm::clamp(x + offset[0], 0, mWidth);
-				int32_t y1 = glm::clamp(y + offset[1], 0, mHeight);
-				return getParticle(x1, y1)->mPosition;
-			};
-			const auto &GetPlaneNormal = [](const float3 &A, const float3 &B, const float3 &C) -> float3 {
-				const auto result = normalize(cross(C - B, A - B));
-				return any(isnan(result)) ? float3(0.0f) : result;
-			};
-
-			float3 accumulator(0);
-			for (const auto &sample : NormalSamples)
-			{
-				accumulator += GetPlaneNormal(
-					GetParticleSample(sample[0]), GetParticleSample(sample[1]), GetParticleSample(sample[2])
-				);
-			}
-
-			accumulator = normalize(accumulator);
-			auto outNormal = pNormals + (y * mWidth + x) * 3;
-			outNormal[0] = accumulator[0];
-			outNormal[1] = accumulator[1];
-			outNormal[2] = accumulator[2];
-
-			if (mbShowParticles)
-			{
-				const auto velocity = particle->mPosition - particle->mPrevPosition;
-				particle->pDbgUnitSphere->setTranslation(particle->mPosition, true);
-				particle->pDbgUnitCylinder->setTranslation(particle->mPosition, true);
-				particle->pDbgUnitCylinder->setRotation(getYawPitchRoll(velocity));
-				particle->pDbgUnitCylinder->setScaling(vec3(0.1, 0.1, length(velocity)));
-			}
-		}
-	}
-	mpVBPositions->unmap();
-	mpVBNormals->unmap();
-
-	const auto &GetTriangles = [&](int32_t x, int32_t y, vec3 triangle0[3], vec3 triangle1[3]) -> void
-	{
-		const auto &GetVertex = [&](int32_t x, int32_t y) -> vec3
-		{
-			return getParticle(x, y)->mPosition;
-		};
-
-		triangle0[0] = GetVertex(x, y + 1);
-		triangle0[1] = GetVertex(x + 1, y);
-		triangle0[2] = GetVertex(x, y);
-
-		triangle1[0] = GetVertex(x + 1, y + 1);
-		triangle1[1] = GetVertex(x + 1, y);
-		triangle1[2] = GetVertex(x, y + 1);
-	};
-
-	auto *pColors = reinterpret_cast<vec3*>(mpVBColors->map(Buffer::MapType::WriteDiscard));
-	std::fill_n(pColors, mHeight * mWidth, vec3(0.0f, 1.0f, 0.0f));
-
-	const auto &HandleCollision = [&](int32_t x, int32_t y) -> void
-	{
-		pColors[y * mWidth + x] = vec3(1.0f, 0.0f, 0.0f);
-		// getParticle(x, y)->mPosition = getParticle(x, y)->mPrevPosition;
-	};
-
-	for (const auto &triangle : triangles)
-	{
-		const vec3 vertices[3] = {
-			mpParticles[triangle.v[0]].mPosition,
-			mpParticles[triangle.v[1]].mPosition,
-			mpParticles[triangle.v[2]].mPosition
-		};
-	}
-
-	for (int32_t y0 = 0; y0 < mHeight - 1; ++y0)
-	{
-		for (int32_t x0 = 0; x0 < mWidth - 1; ++x0)
-		{
-			vec3 triangle0_0[3], triangle0_1[3];
-			GetTriangles(x0, y0, triangle0_0, triangle0_1);
-
-			for (int32_t y1 = y0; y1 < mHeight - 1; ++y1)
-			{
-				for (int32_t x1 = y1 == y0 ? x0 + 1 : 0; x1 < mWidth - 1; ++x1)
-				{
-					if (std::abs(y0 - y1) <= 1 && std::abs(x0 - x1) <= 1)
-						continue;
-
-					vec3 triangle1_0[3], triangle1_1[3];
-					GetTriangles(x1, y1, triangle1_0, triangle1_1);
-
-					vec3 responses[4];
-
-					bool collisions[4] =
-					{
-						intersectTriangles(triangle0_0, triangle1_0, responses[0]),
-						intersectTriangles(triangle0_0, triangle1_1, responses[1]),
-						intersectTriangles(triangle0_1, triangle1_0, responses[2]),
-						intersectTriangles(triangle0_1, triangle1_1, responses[3])
-					};
-
-					if (collisions[0] || collisions[1])
-					{
-						HandleCollision(x0, y0 + 1);
-						HandleCollision(x0 + 1, y0);
-						HandleCollision(x0, y0);
-					}
-					if (collisions[2] || collisions[3])
-					{
-						HandleCollision(x0 + 1, y0 + 1);
-						HandleCollision(x0 + 1, y0);
-						HandleCollision(x0, y0 + 1);
-					}
-					if (collisions[0] || collisions[2])
-					{
-						HandleCollision(x1, y1 + 1);
-						HandleCollision(x1 + 1, y1);
-						HandleCollision(x1, y1);
-					}
-					if (collisions[1] || collisions[3])
-					{
-						HandleCollision(x1 + 1, y1 + 1);
-						HandleCollision(x1 + 1, y1);
-						HandleCollision(x1, y1 + 1);
-					}
-				}
-			}
-		}
-	}
-	mpVBColors->unmap();
-
-	if (mbShowWireframe)
-		mpClothState->setRasterizerState(mpRasterizeWireframe);
-	else
-		mpClothState->setRasterizerState(mpRasterizeNormal);
-
-	pClothSample->mpCamera->setIntoConstantBuffer(mpClothVars->getConstantBuffer("InternalPerFrameCB").get(), "gCamera");
-	pClothSample->mpDirLight->setIntoProgramVars(mpClothVars.get(), mpClothVars["PerFrameCB"].get(), "gDirLight");
-
-	pRenderContext->setGraphicsVars(mpClothVars);
-	pRenderContext->setGraphicsState(mpClothState);
-
-	mpClothState->pushFbo(pTargetFbo);
-	pRenderContext->drawIndexed(triangles.size() * 3, 0, 0);
-	mpClothState->popFbo();
-
 	if (mbShowParticles)
 	{
-		mpDbgSceneRenderer->update(currTime);
-		pClothSample->mpDirLight->setIntoProgramVars(mpModelVars.get(), mpModelVars["PerFrameCB"].get(), "gDirLight");
+		auto dbgScene = Scene::create();
+		auto dbgSceneRenderer = SceneRenderer::create(dbgScene);
 
-		pRenderContext->setGraphicsVars(mpModelVars);
-		pRenderContext->setGraphicsState(mpModelState);
+		for (int32 i = 0; i < mWidth * mHeight; ++i)
+		{
+			const auto &particle = mpParticles[i];
+			const auto velocity = particle.mPosition - particle.mPrevPosition;
 
-		mpModelState->pushFbo(pTargetFbo);
-		mpDbgSceneRenderer->renderScene(pRenderContext, pClothSample->mpCamera.get());
-		mpModelState->popFbo();
+			auto unitCylinder = Scene::ModelInstance::create(
+				pClothSample->mpDbgUnitCylinder,
+				particle.mPosition,
+				getYawPitchRoll(velocity),
+				vec3(0.1, 0.1, length(velocity))
+			);
+			unitCylinder->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
+			dbgScene->addModelInstance(unitCylinder);
+		}
+
+		dbgSceneRenderer->update(currTime);
+		pClothSample->mpDirLight->setIntoProgramVars(
+			pClothSample->mpModelVars.get(), pClothSample->mpModelVars["PerFrameCB"].get(), "gDirLight"
+		);
+
+		pRenderContext->setGraphicsVars(pClothSample->mpModelVars);
+		pRenderContext->setGraphicsState(pClothSample->mpModelState);
+
+		pClothSample->mpModelState->pushFbo(pTargetFbo);
+		dbgSceneRenderer->renderScene(pRenderContext, pClothSample->mpCamera.get());
+		pClothSample->mpModelState->popFbo();
 	}
 }
 
-void ClothPatch::onGuiRender(ClothSample*, SampleCallbacks *pSample)
+void ClothPatch::onGuiRender(ClothSample *pClothSample, SampleCallbacks *pSample)
 {
 	auto *pGui = pSample->getGui();
 
 	if (pGui->beginGroup(mName))
 	{
-		pGui->addCheckBox("Show Particles", mbShowParticles);
-		pGui->addCheckBox("Show Wireframe", mbShowWireframe);
+		ClothModel::onGuiRender(pClothSample, pSample);
 		pGui->endGroup();
 	}
 }
@@ -465,7 +297,7 @@ bool ClothPatch::onMouseEvent(ClothSample *pClothSample, SampleCallbacks* pSampl
 
 			auto closestHit = std::numeric_limits<float32>::max();
 			
-			for (const auto &triangle : triangles)
+			for (const auto &triangle : mTriangles)
 			{
 				const vec3 vertices[3] = {
 					mpParticles[triangle.v[0]].mPosition,
@@ -491,7 +323,7 @@ bool ClothPatch::onMouseEvent(ClothSample *pClothSample, SampleCallbacks* pSampl
 			if (mHeldParticle != nullptr)
 			{
 				mHeldParticle->mbStationary = true;
-				return false;
+				return true;
 			}
 		}
 	} break;
@@ -501,7 +333,7 @@ bool ClothPatch::onMouseEvent(ClothSample *pClothSample, SampleCallbacks* pSampl
 		{
 			mHeldParticle->mbStationary = false;
 			mHeldParticle = nullptr;
-			return false;
+			return true;
 		}
 
 	} break;
@@ -515,5 +347,15 @@ bool ClothPatch::onMouseEvent(ClothSample *pClothSample, SampleCallbacks* pSampl
 		const auto UxV = cross(cameraData.cameraU, cameraData.cameraV);
 		const auto t = dot(rayOrigin - mHeldParticle->mPosition, UxV) / dot(-rayDirection, UxV);
 		mHeldParticle->mPosition = rayOrigin + t * rayDirection;
+		
+		return true;
 	}
+
+	return false;
+}
+
+template <>
+ClothModel* ClothModel::createClothModel<ClothModel::ParticleSpringModel>()
+{
+	return new ::ClothPatch();
 }

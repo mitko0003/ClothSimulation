@@ -30,6 +30,10 @@
 
 const char *ClothSample::ModelPS = "Model.ps.hlsl";
 
+const char *ClothSample::ModelUnitSphere = "Models/UnitSphere.fbx";
+const char *ClothSample::ModelUnitCylinder = "Models/UnitCylinder.fbx";
+const char *ClothSample::ModelUnitCone = "Models/UnitCone.fbx";
+
 const char *ClothSample::SkyBoxTextures[] = {
     "Cubemaps/PiazzaDelPopolo.dds",
     "Cubemaps/SaintLazarusChurch.dds",
@@ -62,7 +66,6 @@ void ClothSample::onGuiRender(SampleCallbacks* pSample, Gui* pGui)
 
     if (pGui->beginGroup("Visuals"))
     {
-
         Gui::DropdownList cameraDropdown;
         cameraDropdown.push_back({ ModelViewCamera, "Model-View" });
         cameraDropdown.push_back({ FirstPersonCamera, "First-Person" });
@@ -72,13 +75,23 @@ void ClothSample::onGuiRender(SampleCallbacks* pSample, Gui* pGui)
         pGui->addDirectionWidget("Light Direction", mLightDirection);
         pGui->endGroup();
     }
-	mClothPatch.onGuiRender(this, pSample);
+
+	Gui::DropdownList clothModelDropdown;
+	clothModelDropdown.push_back({ ClothModel::FiniteElementsMethod, "Finite Elements Method" });
+	clothModelDropdown.push_back({ ClothModel::ParticleSpringModel, "Particle Spring Model" });
+	pGui->addDropdown("Cloth Model", clothModelDropdown, reinterpret_cast<uint32_t&>(mClothModel));
+
+	mClothPatch->onGuiRender(this, pSample);
     pGui->addFloatVar("Air Temperature", mAirTemperature, -25.0f, 35.0f);
 }
 
 void ClothSample::onLoad(SampleCallbacks* pSample, RenderContext* pRenderContext)
 {
     srand(uint32_t(time(0)));
+
+	mpDbgUnitSphere = Model::createFromFile(ModelUnitSphere, Model::LoadFlags::None);
+	mpDbgUnitCylinder = Model::createFromFile(ModelUnitCylinder, Model::LoadFlags::None);
+	mpDbgUnitCone = Model::createFromFile(ModelUnitCone, Model::LoadFlags::None);
 
     mpModelProgram = GraphicsProgram::createFromFile(ModelPS, "", "main");
     mpModelVars = GraphicsVars::create(mpModelProgram->getReflector());
@@ -109,10 +122,11 @@ void ClothSample::onLoad(SampleCallbacks* pSample, RenderContext* pRenderContext
     mCameraType = ModelViewCamera;
 
     mPrevTime = pSample->getCurrentTime();
-    mClothPatch.init(ClothSizeX, ClothSizeY);
 
-    mClothPatch.getParticle(0, 0)->mbStationary = true;
-    mClothPatch.getParticle(ClothSizeX - 1, 0)->mbStationary = true;
+	ClothModel::init();
+	mClothModel = ClothModel::FiniteElementsMethod;
+	mClothPatch = ClothModel::createClothModel(mClothModel);
+    mClothPatch->init(8, 8);
 
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(Sampler::Filter::Linear, Sampler::Filter::Linear, Sampler::Filter::Linear);
@@ -130,7 +144,7 @@ void ClothSample::onFrameRender(SampleCallbacks* pSample, RenderContext* pRender
 	const auto deltaTime = currTime - mPrevTime;
 	mPrevTime = currTime;
 
-	mClothPatch.simulate(deltaTime);
+	mClothPatch->simulate(deltaTime);
     mpSkybox->render(pRenderContext, mpCamera.get());
 
     const auto showVectorField = [&](BoundingBox box, vec3 step, vec3 direction) -> void
@@ -148,11 +162,11 @@ void ClothSample::onFrameRender(SampleCallbacks* pSample, RenderContext* pRender
             {
                 for (auto z = min.z; z <= max.z; z += step.z)
                 {
-                    auto unitCylinder = Scene::ModelInstance::create(mpUnitCylinder, vec3(x, y, z), yawPitchRoll, vec3(0.1f));
+                    auto unitCylinder = Scene::ModelInstance::create(mpDbgUnitCylinder, vec3(x, y, z), yawPitchRoll, vec3(0.1f));
                     unitCylinder->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
                     scene->addModelInstance(unitCylinder);
 
-                    auto unitCone = Scene::ModelInstance::create(mpUnitCone, vec3(x, y, z) + direction, yawPitchRoll, vec3(0.1f));
+                    auto unitCone = Scene::ModelInstance::create(mpDbgUnitCone, vec3(x, y, z) + direction, yawPitchRoll, vec3(0.1f));
                     unitCone->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
                     scene->addModelInstance(unitCone);
                 }
@@ -173,6 +187,7 @@ void ClothSample::onFrameRender(SampleCallbacks* pSample, RenderContext* pRender
     mpDirLight->setWorldDirection(mLightDirection);
 
     getActiveCameraController().update();
+	mClothPatch->render(this, pSample);
 
     //BoundingBox box;
     //box.center = vec3(0, 0, 0);
@@ -191,7 +206,7 @@ bool ClothSample::onKeyEvent(SampleCallbacks* pSample, const KeyboardEvent& keyE
 
 bool ClothSample::onMouseEvent(SampleCallbacks* pSample, const MouseEvent& mouseEvent)
 {
-	if (!mClothPatch.onMouseEvent(this, pSample, mouseEvent))
+	if (!mClothPatch->onMouseEvent(this, pSample, mouseEvent))
 		return getActiveCameraController().onMouseEvent(mouseEvent);
 	return false;
 }

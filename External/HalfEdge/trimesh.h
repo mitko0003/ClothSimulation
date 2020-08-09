@@ -9,7 +9,7 @@ namespace trimesh
 {
 
 // trimesh_t::build() needs the unordered edges of the mesh.  If you don't have them, call this first.
-void unordered_edges_from_triangles( const unsigned long num_triangles, const trimesh::triangle_t* triangles, std::vector< trimesh::edge_t >& edges_out );
+void unordered_edges_from_triangles( const int num_triangles, const trimesh::triangle_t* triangles, std::vector< trimesh::edge_t >& edges_out );
 
 class trimesh_t
 {
@@ -45,7 +45,7 @@ public:
     //       but could do this for callers who do not already have edges.
     // NOTE: 'triangles' and 'edges' are not needed after the call to build()
     //       completes and may be destroyed.
-    void build( const unsigned long num_vertices, const unsigned long num_triangles, const trimesh::triangle_t* triangles, const unsigned long num_edges, const trimesh::edge_t* edges );
+    void build( const int num_vertices, const int num_triangles, const trimesh::triangle_t* triangles, const int num_edges, const trimesh::edge_t* edges );
     
     void clear()
     {
@@ -126,7 +126,7 @@ public:
         
         std::vector< index_t > neighbors;
         vertex_vertex_neighbors( vertex_index, neighbors );
-        return neighbors.size();
+        return int(neighbors.size());
     }
     
     void vertex_face_neighbors( const index_t vertex_index, std::vector< index_t >& result ) const
@@ -171,6 +171,9 @@ public:
     std::vector< index_t > boundary_vertices() const;
     
     std::vector< std::pair< index_t, index_t > > boundary_edges() const;
+
+
+	index_t get_num_vertices() const { return index_t(m_vertex_halfedges.size()); }
     
 private:
     std::vector< halfedge_t > m_halfedges;

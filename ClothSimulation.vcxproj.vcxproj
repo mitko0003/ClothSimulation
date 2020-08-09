@@ -23,8 +23,6 @@
     <ClInclude Include="ClothSample.h" />
     <ClInclude Include="External\HalfEdge\trimesh.h" />
     <ClInclude Include="External\HalfEdge\trimesh_types.h" />
-    <ClInclude Include="FiniteElementsMethod.h" />
-    <ClInclude Include="ParticleSpringModel.h" />
     <ClInclude Include="TriangleIntersection.h" />
     <ClInclude Include="Utils.h" />
   </ItemGroup>
@@ -77,6 +75,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\dimit\source\repos\ClothSimulation\External\eigen\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
