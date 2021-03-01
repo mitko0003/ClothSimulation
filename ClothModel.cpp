@@ -10,15 +10,16 @@ GraphicsProgram::SharedPtr ClothModel::spClothProgram = nullptr;
 GraphicsVars::SharedPtr ClothModel::spClothVars = nullptr;
 VertexLayout::SharedPtr ClothModel::spVertexLayout = nullptr;
 
-int32 ClothModel::createRectMesh(int32_t sizeX, int32_t sizeY, std::vector<float3> &positions, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh)
+int32 ClothModel::createRectMesh(const vec2 &size, const ivec2 &tessellation, std::vector<float3> &positions, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh)
 {
-	const auto vertexCount = sizeX * sizeY;
+	const auto vertexCount = tessellation.x * tessellation.y;
+	const auto gridStep = size / vec2(tessellation - 1);
 
-	for (int32 y = 0; y < sizeY; ++y)
+	for (int32 y = 0; y < tessellation.y; ++y)
 	{
-		for (int32 x = 0; x < sizeX; ++x)
+		for (int32 x = 0; x < tessellation.x; ++x)
 		{
-			positions.emplace_back(float32(x), float32(y), 0.0f);
+			positions.emplace_back(float32(x) * gridStep.x - size.x * 0.5f, size.y * 0.5f - float32(y) * gridStep.y, 0.0f);
 		}
 	}
 
@@ -31,19 +32,19 @@ int32 ClothModel::createRectMesh(int32_t sizeX, int32_t sizeY, std::vector<float
 		triangles.push_back(triangle);
 	};
 
-	for (int32 y = 0; y < sizeY - 1; ++y)
+	for (int32 y = 0; y < tessellation.y - 1; ++y)
 	{
-		for (int32 x = 0; x < sizeX - 1; ++x)
+		for (int32 x = 0; x < tessellation.x - 1; ++x)
 		{
 			EmitTriangle(
-				(y + 1) * sizeY + x,
-				y * sizeY + (x + 1),
-				y * sizeY + x
+				(y + 1) * tessellation.x + x,
+				y * tessellation.x + (x + 1),
+				y * tessellation.x + x
 			);
 			EmitTriangle(
-				(y + 1) * sizeY + (x + 1),
-				y * sizeY + (x + 1),
-				(y + 1) * sizeY + x
+				(y + 1) * tessellation.x + (x + 1),
+				y * tessellation.x + (x + 1),
+				(y + 1) * tessellation.x + x
 			);
 		}
 	}
@@ -111,16 +112,46 @@ void ClothModel::sharedInit()
 	mpClothState->setVao(mpVao);
 }
 
+void ClothModel::getTriangleVertices(const trimesh::triangle_t &triangle, vec3 vertices[3]) const
+{
+    vertices[0] = getVertexPosition(triangle[0]);
+    vertices[1] = getVertexPosition(triangle[1]);
+    vertices[2] = getVertexPosition(triangle[2]);
+};
+
+vec3 ClothModel::getVertexNormal(int32 index) const
+{
+    return computeVertexNormal(index);
+}
+
+vec3 ClothModel::computeVertexNormal(int32 index) const
+{
+    auto faces = mMesh.vertex_face_neighbors(index);
+    float3 normal(0.0f);
+
+    const auto &GetPlaneNormal = [](const float3 &A, const float3 &B, const float3 &C) -> float3 {
+        const auto result = normalize(cross(C - B, A - B));
+        return any(isnan(result)) ? float3(0.0f) : result;
+    };
+
+    for (const auto &face : faces)
+    {
+        const auto &triangle = mTriangles[face];
+        normal += GetPlaneNormal(
+            getVertexPosition(triangle[0]),
+            getVertexPosition(triangle[1]),
+            getVertexPosition(triangle[2])
+        );
+    }
+
+    return normalize(normal);
+}
+
 void ClothModel::render(ClothSample *pClothSample, SampleCallbacks *pSample)
 {
 	const auto currTime = pSample->getCurrentTime();
 	auto *pRenderContext = pSample->getRenderContext();
 	const auto &pTargetFbo = pSample->getCurrentFbo();
-
-	Scene::SharedPtr dbgScene =
-		mbShowParticles ? Scene::create() : nullptr;
-	SceneRenderer::SharedPtr dbgSceneRenderer =
-		mbShowParticles ? SceneRenderer::create(dbgScene) : nullptr;
 
 	const int32 vertexCount = int32(mMesh.get_num_vertices());
 
@@ -131,90 +162,72 @@ void ClothModel::render(ClothSample *pClothSample, SampleCallbacks *pSample)
 		const auto position = getVertexPosition(vertex);
 		std::copy_n(position.data.data, 3, pPositions + vertex * 3);
 
-		auto faces = mMesh.vertex_face_neighbors(vertex);
-		float3 normal(0.0f);
-
-		const auto &GetPlaneNormal = [](const float3 &A, const float3 &B, const float3 &C) -> float3 {
-			const auto result = normalize(cross(C - B, A - B));
-			return any(isnan(result)) ? float3(0.0f) : result;
-		};
-
-		for (const auto &face : faces)
-		{
-			const auto &triangle = mTriangles[face];
-			normal += GetPlaneNormal(
-				getVertexPosition(triangle[0]),
-				getVertexPosition(triangle[1]),
-				getVertexPosition(triangle[2])
-			);
-		}
-
-		normal = normalize(normal);
+        const auto normal = getVertexNormal(vertex);
 		std::copy_n(normal.data.data, 3, pNormals + vertex * 3);
 
-		if (mbShowParticles)
+		if (mUserParams.bShowNormals)
 		{
-			auto unitSphere = Scene::ModelInstance::create(pClothSample->mpDbgUnitSphere, position, vec3(0.0f), vec3(0.1f));
+			pClothSample->drawVector(normal, position);
+		}
+		else if (mUserParams.bShowParticles)
+		{
+			auto unitSphere = Scene::ModelInstance::create(pClothSample->mpDbgUnitSphere, position, vec3(0.0f), vec3(0.0005f));
 			unitSphere->move(vec3(0.0f), vec3(0.0f, 0.0f, 1.0f), vec3(0.0f, 1.0f, 0.0f));
-			dbgScene->addModelInstance(unitSphere);
+			pClothSample->mpScene->addModelInstance(unitSphere);
 		}
 	}
 	mpVBPositions->unmap();
 	mpVBNormals->unmap();
 
-	const auto &GetTriangleVertices = [&](const trimesh::triangle_t &triangle, vec3 vertices[3]) -> void
-	{
-		vertices[0] = getVertexPosition(triangle[0]);
-		vertices[1] = getVertexPosition(triangle[1]);
-		vertices[2] = getVertexPosition(triangle[2]);
-	};
-
 	auto *pColors = reinterpret_cast<vec3*>(mpVBColors->map(Buffer::MapType::WriteDiscard));
-	std::fill_n(pColors, vertexCount, vec3(0.0f, 1.0f, 0.0f));
+	std::fill_n(pColors, vertexCount, mUserParams.baseColor);
 
-	const auto &HandleCollision = [&](const trimesh::triangle_t &triangle) -> void
+	if (mUserParams.bShowSelfCollisions)
 	{
-		pColors[triangle[0]] = vec3(1.0f, 0.0f, 0.0f);
-		pColors[triangle[1]] = vec3(1.0f, 0.0f, 0.0f);
-		pColors[triangle[2]] = vec3(1.0f, 0.0f, 0.0f);
-		// getParticle(x, y)->mPosition = getParticle(x, y)->mPrevPosition;
-	};
-
-	for (int32 t0 = 0; t0 < mTriangles.size(); ++t0)
-	{
-		vec3 t0_vertices[3];
-		const auto &triangle0 = mTriangles[t0];
-		GetTriangleVertices(triangle0, t0_vertices);
-
-		for (int32 t1 = t0 + 1; t1 < mTriangles.size(); ++t1)
+		const auto &HandleCollision = [&](const trimesh::triangle_t &triangle) -> void
 		{
-			vec3 t1_vertices[3];
-			const auto &triangle1 = mTriangles[t1];
-			GetTriangleVertices(triangle1, t1_vertices);
+			pColors[triangle[0]] = vec3(1.0f, 0.0f, 0.0f);
+			pColors[triangle[1]] = vec3(1.0f, 0.0f, 0.0f);
+			pColors[triangle[2]] = vec3(1.0f, 0.0f, 0.0f);
+			// getParticle(x, y)->mPosition = getParticle(x, y)->mPrevPosition;
+		};
 
-			vec3 response; // TODO(mitko): Remove extra "responce" code from triangle intersect implementation
-			bool collision = intersectTriangles(t0_vertices, t1_vertices, response);
-			if (!collision) continue;
+		for (int32 t0 = 0; t0 < mTriangles.size(); ++t0)
+		{
+			vec3 t0_vertices[3];
+			const auto &triangle0 = mTriangles[t0];
+            getTriangleVertices(triangle0, t0_vertices);
 
-			for (const auto vertex : triangle0.v)
+			for (int32 t1 = t0 + 1; t1 < mTriangles.size(); ++t1)
 			{
-				const auto faces = mMesh.vertex_face_neighbors(vertex);
-				for (const auto face : faces)
-				{
-					collision &= triangle1[0] != vertex;
-					collision &= triangle1[1] != vertex;
-					collision &= triangle1[2] != vertex;
-				}
-			}
+				vec3 t1_vertices[3];
+				const auto &triangle1 = mTriangles[t1];
+                getTriangleVertices(triangle1, t1_vertices);
 
-			if (!collision) continue;
-			HandleCollision(triangle0);
-			HandleCollision(triangle1);
+				vec3 response; // TODO(mitko): Remove extra "responce" code from triangle intersect implementation
+				bool collision = intersectTriangles(t0_vertices, t1_vertices, response);
+				if (!collision) continue;
+
+				for (const auto vertex : triangle0.v)
+				{
+					const auto faces = mMesh.vertex_face_neighbors(vertex);
+					for (const auto face : faces)
+					{
+						collision &= triangle1[0] != vertex;
+						collision &= triangle1[1] != vertex;
+						collision &= triangle1[2] != vertex;
+					}
+				}
+
+				if (!collision) continue;
+				HandleCollision(triangle0);
+				HandleCollision(triangle1);
+			}
 		}
 	}
 	mpVBColors->unmap();
 
-	if (mbShowWireframe)
+	if (mUserParams.bShowWireframe)
 		mpClothState->setRasterizerState(mpRasterizeWireframe);
 	else
 		mpClothState->setRasterizerState(mpRasterizeNormal);
@@ -228,38 +241,40 @@ void ClothModel::render(ClothSample *pClothSample, SampleCallbacks *pSample)
 	mpClothState->pushFbo(pTargetFbo);
 	pRenderContext->drawIndexed(uint32(mTriangles.size()) * 3u, 0, 0);
 	mpClothState->popFbo();
-
-	if (dbgSceneRenderer != nullptr)
-	{
-		dbgSceneRenderer->update(currTime);
-		pClothSample->mpDirLight->setIntoProgramVars(
-			pClothSample->mpModelVars.get(), pClothSample->mpModelVars["PerFrameCB"].get(), "gDirLight"
-		);
-
-		pRenderContext->setGraphicsVars(pClothSample->mpModelVars);
-		pRenderContext->setGraphicsState(pClothSample->mpModelState);
-
-		pClothSample->mpModelState->pushFbo(pTargetFbo);
-		dbgSceneRenderer->renderScene(pRenderContext, pClothSample->mpCamera.get());
-		pClothSample->mpModelState->popFbo();
-	}
 }
 
-void ClothModel::onGuiRender(ClothSample*, SampleCallbacks *pSample)
+void ClothModel::onGuiRender(ClothSample *pClothSample, SampleCallbacks *pSample)
 {
 	auto *pGui = pSample->getGui();
-	pGui->addCheckBox("Show Particles", mbShowParticles);
-	pGui->addCheckBox("Show Wireframe", mbShowWireframe);
+
+    pGui->addFloatSlider("Drag", mUserParams.windDragCoefficient, 0.0f, 1.0f);
+    pGui->addFloatSlider("Lift", mUserParams.windLiftCoefficient, 0.0f, 1.0f);
+
+	pGui->addCheckBox("Show Particles", mUserParams.bShowParticles);
+	pGui->addCheckBox("Show Wireframe", mUserParams.bShowWireframe);
+    pGui->addCheckBox("Show Surface Normals", mUserParams.bShowNormals);
+    pGui->addCheckBox("Show Wind Effect", mUserParams.bShowWindEffect);
+	pGui->addCheckBox("Show Self Collisions", mUserParams.bShowSelfCollisions);
+    pGui->addRgbColor("Base Color", mUserParams.baseColor);
 }
 
-ClothModel *ClothModel::createClothModel(EType type)
+auto ClothModel::createClothModel(EType type, const ClothModel *parent) -> SharedPtr
 {
+	const auto *parentToPass = parent && parent->getType() == type ? parent : nullptr;
+	SharedPtr result;
 	switch (type)
 	{
-	case ParticleSpringModel: return createClothModel<ParticleSpringModel>();
-	case FiniteElementsMethod: return createClothModel<FiniteElementsMethod>();
+	case ParticleSpringModel: result = createClothModel<ParticleSpringModel>(parentToPass); break;
+	case FiniteElementsMethod: result = createClothModel<FiniteElementsMethod>(parentToPass); break;
 	default:
 		should_not_get_here();
 		return nullptr;
 	}
+
+	if (parent != nullptr)
+	{
+		result->mUserParams = parent->mUserParams;
+	}
+
+	return result;
 }

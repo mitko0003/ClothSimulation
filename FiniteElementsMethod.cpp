@@ -2,7 +2,7 @@
 #include "External/HalfEdge/trimesh.h"
 
 #include "ClothSample.h"
-
+#pragma optimize("", off)
 static constexpr float32_t ShearModulus(float32_t E45, float32_t V45)
 {
 	return E45 * 0.5f / (1.0f + V45);
@@ -10,8 +10,8 @@ static constexpr float32_t ShearModulus(float32_t E45, float32_t V45)
 
 struct TElasticProperties // For orthotropic materials
 {
-	float32_t Ex, Ey;    // Young’s modulus in MPa
-	float32_t Vxy, Vyx;  // Poisson’s ratio
+	float32_t Ex, Ey;    // Youngâ€™s modulus in MPa
+	float32_t Vxy, Vyx;  // Poissonâ€™s ratio
 	float32_t Es;        // Shear modulus
 
 	Eigen::Matrix<float32_t, 3, 3> getHookeLawMatrix() const
@@ -24,15 +24,26 @@ struct TElasticProperties // For orthotropic materials
 	}
 };
 
-// Experimental values from:
+enum EFabricTemplate
+{
+	ftCotton,    // 100% Cotton
+	ftWool,      // 100% Wool
+	ftWoolLycra, // 95% Wool + 5% lycra
+	ftPolyester, // 100% Polyester
+
+	ftCount
+};
+
+// Material parameters from:
 // Determination of the Elastic Constants of 
 // Plain Woven Fabrics by a Tensile Test in Various Directions
-static constexpr TElasticProperties ElasticProperties[] =
+static constexpr TElasticProperties ElasticProperties[ftCount] =
 {
-	{ 32.559f, 12.436f, 0.566f, 0.243f, ShearModulus(0.821f, 1.136f) }, // 100% Cotton
-	{ 21.860f,  8.149f, 0.705f, 0.277f, ShearModulus(0.170f, 1.377f) }, // 100% Wool
-	{  0.250f,  0.851f, 0.071f, 0.196f, ShearModulus(0.076f, 0.599f) }, // 95% Wool + 5% lycra
-	{  5.152f, 11.674f, 0.381f, 0.779f, ShearModulus(0.478f, 1.366f) }, // 100% Polyester
+	{  245.0f,  366.0f, 0.566f, 366.0f * 0.566f / 245.0f, 0.38f }, // wool from "A Fast Finite Element Solution for Cloth Modelling"
+	// { 32.559f, 12.436f, 0.566f, 0.243f, ShearModulus(0.821f, 1.136f) }, // 100% Cotton
+	{ 21.860f,  8.149f, 0.705f, 0.277f, ShearModulus(0.170f, 1.377f) }, // ftWool
+	{  0.250f,  0.851f, 0.071f, 0.196f, ShearModulus(0.076f, 0.599f) }, // ftWoolLycra
+	{  5.152f, 11.674f, 0.381f, 0.779f, ShearModulus(0.478f, 1.366f) }, // ftPolyester
 };
 
 struct TParticle
@@ -41,6 +52,7 @@ struct TParticle
 	Eigen::Vector<float32_t, 3> mV;
 	Eigen::Vector<float32_t, 3> mXn;
 	Eigen::Vector<float32_t, 3> mX0;
+    bool mbStationary;
 
 	template <bool deformed = true>
 	Eigen::Vector<float32_t, 3>& getPosition()
@@ -60,7 +72,16 @@ struct FiniteElementsMethod : public ClothModel
 	std::vector<TParticle> mParticles;
 	std::vector<float32_t> mTrianglesArea;
 
+    float32 mTimeRemainder = 0.0f;
 	TElasticProperties mElasticProperties;
+
+	struct
+	{
+        float32 timeStep = 0.01f;
+		EFabricTemplate fabricTemplate = ftCotton;
+		float32 fabricDensity = 1.0f;
+        vec2 rayleighCoefficients = vec2(0.01f, 0.01f);
+	} mUserParams;
 
 	FiniteElementsMethod()
 	{
@@ -73,10 +94,11 @@ struct FiniteElementsMethod : public ClothModel
 	}
 
 	vec3 getVertexPosition(int32 vertexIndex) const final override;
-	void init(int32 width, int32 height) final override;
+
+	void init(const vec2 &size, const ivec2 &tessellation) final override;
 	void init(const Model *model) final override;
 	
-	void simulate(float32_t deltaTime) final override;
+	void simulate(ClothSample*, float32_t deltaTime) final override;
 	void render(ClothSample*, SampleCallbacks*) final override;
 
 	void onGuiRender(ClothSample*, SampleCallbacks*) final override;
@@ -84,12 +106,13 @@ struct FiniteElementsMethod : public ClothModel
 
 private:
 	Eigen::Matrix<float32_t, 9, 6> getPlanarProjectedRotation(const trimesh::triangle_t&) const;
-	Eigen::Matrix<float32_t, 6, 6> getElementStiffnessMatrix(const trimesh::triangle_t&, float32_t) const;
+	Eigen::Matrix<float32_t, 6, 6> getElementStiffnessMatrix(const Eigen::Vector<float32_t, 2>(&)[3], float32_t) const;
 	void assembleCorotatedStiffnessMatrix(Eigen::MatrixXf &K, Eigen::VectorXf &f) const;
 	void assembleRayleighDampingMatrix(const Eigen::MatrixXf &M, const Eigen::MatrixXf &K, Eigen::MatrixXf &D) const;
 	void assembleParticlesData(Eigen::MatrixXf &M, Eigen::VectorXf &v, Eigen::VectorXf &x) const;
 	void assembleExternalForces(Eigen::VectorXf &fext) const;
 	float32_t getVoronoiArea(int32 vertexIndex);
+	void updateMass();
 };
 
 template <bool deformed>
@@ -102,13 +125,16 @@ static float32_t getTriangleArea(const trimesh::triangle_t &triangle, const std:
 	const auto xij = xj - xi;
 	const auto xik = xk - xi;
 
-	return xij.cross(xik)[0] / 2.0f;
+	return xij.cross(xik).norm() / 2.0f;
 }
 
-void FiniteElementsMethod::init(int32 width, int32 height)
+void FiniteElementsMethod::init(const vec2 &size, const ivec2 &tessellation)
 {
+	mUserParams.fabricTemplate = ftCotton;
+	mElasticProperties = ElasticProperties[mUserParams.fabricTemplate];
+
 	std::vector<float3> positions;
-	const auto vertexCount = createRectMesh(width, height, positions, mTriangles, mMesh);
+	const auto vertexCount = createRectMesh(size, tessellation, positions, mTriangles, mMesh);
 	
 	for (const auto &position : positions)
 	{
@@ -117,16 +143,17 @@ void FiniteElementsMethod::init(int32 width, int32 height)
 		particle.mXn[1] = position[1];
 		particle.mXn[2] = position[2];
 		particle.mX0 = particle.mXn;
-		particle.mV = particle.mV.Zero();
+		particle.mV.setZero();
 		mParticles.emplace_back(particle);
 	}
+
+    mParticles[0].mbStationary = true;
+    mParticles[tessellation.x - 1].mbStationary = true;
 
 	for (const auto &triangle : mTriangles)
 		mTrianglesArea.emplace_back(getTriangleArea<false>(triangle, mParticles));
 
-	for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
-		mParticles[i].mM = getVoronoiArea(i) * mMaterialDensity;
-
+	updateMass();
 	sharedInit();
 }
 
@@ -176,13 +203,19 @@ vec3 FiniteElementsMethod::getVertexPosition(int32 vertexIndex) const
 	);
 }
 
+void FiniteElementsMethod::updateMass()
+{
+	for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
+		mParticles[i].mM = getVoronoiArea(i) * mUserParams.fabricDensity;
+}
+
 float32_t FiniteElementsMethod::getVoronoiArea(int32 particle)
 {
 	std::vector<float3> vertices;
 	auto faces = mMesh.vertex_face_neighbors(particle);
 
 	auto area = 0.0f;
-	for (const auto &face : faces) // TODO: this returns indexes in mTriangles
+	for (const auto &face : faces)
 	{
 		const auto &triangle = mTriangles[face];
 
@@ -245,18 +278,17 @@ void FiniteElementsMethod::assembleParticlesData(Eigen::MatrixXf &M, Eigen::Vect
 	}
 }
 
-template <bool deformed>
-static Eigen::Matrix<float32_t, 3, 6> getTriangleShapeMatrix(const trimesh::triangle_t &triangle, const std::vector<TParticle> &particles)
+static Eigen::Matrix<float32_t, 3, 6> getTriangleShapeMatrix(const Eigen::Vector<float32_t, 2>(&triangle)[3], float32_t Ae)
 {
-	const auto v1 = particles[triangle.i].getPosition<deformed>();
-	const auto v2 = particles[triangle.j].getPosition<deformed>();
-	const auto v3 = particles[triangle.k].getPosition<deformed>();
+	const auto v1 = triangle[0];
+	const auto v2 = triangle[1];
+	const auto v3 = triangle[2];
 
 	return Eigen::Matrix<float32_t, 3, 6>({
 		{          v2.y() - v3.y(),                     0.0f,          v3.y() - v1.y(),                     0.0f,          v1.y() - v2.y(),                     0.0f },
 		{                     0.0f,          v3.x() - v2.x(),                     0.0f,          v1.x() - v3.x(),                     0.0f,          v2.x() - v1.x() },
 		{ (v3.x() - v2.x()) / 2.0f, (v2.y() - v3.y()) / 2.0f, (v1.x() - v3.x()) / 2.0f, (v3.y() - v1.y()) / 2.0f, (v2.x() - v1.x()) / 2.0f, (v1.y() - v2.y()) / 2.0f }
-	});
+	}) / (2.0f * Ae);
 }
 
 template <bool deformed>
@@ -330,7 +362,7 @@ Eigen::Matrix<float32_t, 9, 6> FiniteElementsMethod::getPlanarProjectedRotation(
 	const auto PTxR = P.transpose() * R;
 
 	Eigen::Matrix<float32_t, 9, 6> result;
-	result = result.Zero();
+	result.setZero();
 	
 	result.block<3, 2>(0, 0) = PTxR;
 	result.block<3, 2>(3, 2) = PTxR;
@@ -339,10 +371,10 @@ Eigen::Matrix<float32_t, 9, 6> FiniteElementsMethod::getPlanarProjectedRotation(
 	return result;
 }
 
-Eigen::Matrix<float32_t, 6, 6> FiniteElementsMethod::getElementStiffnessMatrix(const trimesh::triangle_t &triangle, float32 A) const
+Eigen::Matrix<float32_t, 6, 6> FiniteElementsMethod::getElementStiffnessMatrix(const Eigen::Vector<float32_t, 2>(&triangle)[3], float32 A) const
 {
 	const auto C = mElasticProperties.getHookeLawMatrix();
-	const auto B = getTriangleShapeMatrix<true>(triangle, mParticles);
+	const auto B = getTriangleShapeMatrix(triangle, A);
 	return A * B.transpose() * C * B;
 }
 
@@ -352,13 +384,37 @@ void addBlocks(TBlockLhs &lhs, const TBlockRhs &rhs)
 	lhs = TMatrix(lhs) + TMatrix(rhs);
 }
 
-void FiniteElementsMethod::assembleCorotatedStiffnessMatrix(Eigen::MatrixXf &K, Eigen::VectorXf &f) const
+template <typename TMatrix>
+void PrintMatrix(const TMatrix &matrix)
 {
+	std::string result;
+	for (int32 row = 0; row < matrix.rows(); ++row)
+	{
+		for (int32 col = 0; col < matrix.cols(); ++col)
+		{
+			result.append(std::to_string(matrix(row, col))).append(" ");
+		}
+		result.append("\n");
+	}
+	printToDebugWindow(result);
+}
+
+void FiniteElementsMethod::assembleCorotatedStiffnessMatrix(Eigen::MatrixXf &K, Eigen::VectorXf &f0) const
+{
+	K.setZero();
+	f0.setZero();
+
 	for (int32 t = 0, size = int32(mTriangles.size()); t < size; ++t)
 	{
 		const auto &triangle = mTriangles[t];
+		const auto P0 = getPlaneProjectionMatrix<false>(triangle, mParticles);
 
-		const auto Ke = getElementStiffnessMatrix(triangle, mTrianglesArea[t]);
+		Eigen::Vector<float32_t, 2> _x0[3];
+		_x0[0] = P0 * mParticles[triangle[0]].mX0;
+		_x0[1] = P0 * mParticles[triangle[1]].mX0;
+		_x0[2] = P0 * mParticles[triangle[2]].mX0;
+
+		const auto Ke = getElementStiffnessMatrix(_x0, mTrianglesArea[t]);
 		const auto R = getPlanarProjectedRotation(triangle);
 		const auto RxKe = R * Ke;
 
@@ -368,23 +424,21 @@ void FiniteElementsMethod::assembleCorotatedStiffnessMatrix(Eigen::MatrixXf &K, 
 			for (int32 j = 0; j < arraysize(triangle.v); ++j)
 			{
 				addBlocks(
-					K.block<3, 3>(3 * triangle.v[i], 3 * triangle.v[j]), RxKexRT.block<3, 3>(3 * i, 3 * j)
+					K.block<3, 3>(3 * triangle[i], 3 * triangle[j]), RxKexRT.block<3, 3>(3 * i, 3 * j)
 				);
 			}
 		}
 
-		const auto P0 = getPlaneProjectionMatrix<false>(triangle, mParticles);
-		
 		Eigen::Vector<float32_t, 6> x0;
-		x0.segment<2>(0) = P0 * mParticles[triangle[0]].mX0;
-		x0.segment<2>(2) = P0 * mParticles[triangle[1]].mX0;
-		x0.segment<2>(4) = P0 * mParticles[triangle[2]].mX0;
-		const auto f0 = RxKe * x0;
+		x0.segment<2>(0) = _x0[0];
+		x0.segment<2>(2) = _x0[1];
+		x0.segment<2>(4) = _x0[2];
+		const auto f0e = -RxKe * x0;
 
 		for (int32 i = 0; i < arraysize(triangle.v); ++i)
 		{
 			addBlocks(
-				f.segment<3>(3 * triangle.v[i]), f0.segment<3>(3 * i)
+				f0.segment<3>(3 * triangle[i]), f0e.segment<3>(3 * i)
 			);
 		}
 	}
@@ -392,7 +446,7 @@ void FiniteElementsMethod::assembleCorotatedStiffnessMatrix(Eigen::MatrixXf &K, 
 
 void FiniteElementsMethod::assembleRayleighDampingMatrix(const Eigen::MatrixXf &M, const Eigen::MatrixXf &K, Eigen::MatrixXf &D) const
 {
-	float32_t alpha = 0.5f, beta = 0.5f;
+	float32_t alpha = mUserParams.rayleighCoefficients.x, beta = mUserParams.rayleighCoefficients.y;
 	D = M * alpha + K * beta;
 }
 
@@ -402,40 +456,57 @@ void FiniteElementsMethod::assembleExternalForces(Eigen::VectorXf &fext) const
 	for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
 	{
 		auto &particle = mParticles[i];
-		const auto force_gravity = particle.mM * gravityAcceleration;
-		fext.segment<3>(3 * i) = force_gravity;
+		//if (i == 0 || i == 10)
+		//{
+		//	fext.segment<3>(3 * i) = (mParticles[i].mX0 - mParticles[i].mXn) * 100.0f;
+		//}
+		//else
+		{
+			const auto force_gravity = particle.mM * gravityAcceleration;
+			fext.segment<3>(3 * i) = force_gravity;
+		}
 	}
 }
 
-void FiniteElementsMethod::simulate(float32_t delta_t)
+void FiniteElementsMethod::simulate(ClothSample*, float32_t delta_t)
 {
-	Eigen::MatrixXf K(3 * mParticles.size(), 3 * mParticles.size());
-	Eigen::VectorXf f(3 * mParticles.size());
-	assembleCorotatedStiffnessMatrix(K, f);
+    for (mTimeRemainder += delta_t, delta_t = mUserParams.timeStep; mTimeRemainder >= delta_t;)
+    {
+        mTimeRemainder -= delta_t;
+        Eigen::MatrixXf K(3 * mParticles.size(), 3 * mParticles.size());
+        Eigen::VectorXf f0(3 * mParticles.size());
+        assembleCorotatedStiffnessMatrix(K, f0);
 
-	Eigen::MatrixXf M(3 * mParticles.size(), 3 * mParticles.size());
-	Eigen::VectorXf v(3 * mParticles.size());
-	Eigen::VectorXf x(3 * mParticles.size());
-	assembleParticlesData(M, v, x);
+        Eigen::MatrixXf M(3 * mParticles.size(), 3 * mParticles.size());
+        Eigen::VectorXf v(3 * mParticles.size());
+        Eigen::VectorXf x(3 * mParticles.size());
+        assembleParticlesData(M, v, x);
 
-	Eigen::MatrixXf D(3 * mParticles.size(), 3 * mParticles.size());
-	assembleRayleighDampingMatrix(M, K, D);
+        Eigen::MatrixXf D(3 * mParticles.size(), 3 * mParticles.size());
+        assembleRayleighDampingMatrix(M, K, D);
 
-	Eigen::VectorXf fext(3 * mParticles.size());
-	assembleExternalForces(fext);
+        Eigen::VectorXf fext(3 * mParticles.size());
+        assembleExternalForces(fext);
 
-	const Eigen::MatrixXf A = M + delta_t * D + Square(delta_t) * K;
-	const Eigen::VectorXf b = K * x + f - fext + delta_t * K * v + D * v;
-	const Eigen::VectorXf delta_v = A.colPivHouseholderQr().solve(b); // A * x = b
+        const Eigen::MatrixXf A = M + delta_t * D + Square(delta_t) * K;
+        const Eigen::VectorXf b = -delta_t * (K * x + f0 - fext + delta_t * K * v + D * v);
+        const Eigen::VectorXf delta_v = A.colPivHouseholderQr().solve(b); // A * x = b
 
-	for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
-	{
-		auto &particle = mParticles[i];
-		particle.mV += delta_v.segment<3>(3 * i);
-		particle.mXn += delta_t * particle.mV;
-	}
+        for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
+        {
+            auto &particle = mParticles[i];
+            particle.mV += delta_v.segment<3>(3 * i);
+            particle.mXn += delta_t * particle.mV;
 
-	mParticles[0].mXn = mParticles[0].mX0; // TODO: implement constraints interface
+            if (particle.mbStationary)
+            {
+                particle.mV.setZero();
+                particle.mXn = particle.mX0; // TODO: implement constraints interface
+            }
+        }
+
+        break; // The model cannot be simulated with interactive framerates.
+    }
 }
 
 void FiniteElementsMethod::render(ClothSample *pClothSample, SampleCallbacks *pSample)
@@ -447,8 +518,22 @@ void FiniteElementsMethod::onGuiRender(ClothSample *pClothSample, SampleCallback
 {
 	auto *pGui = pSample->getGui();
 
-	if (pGui->beginGroup(mName))
+	if (pGui->beginGroup(mName, true))
 	{
+        pClothSample->addFloatSlider("Const Time Step", mUserParams.timeStep, 0.0001f, 0.1f, false, "%.4f");
+
+		Gui::DropdownList fabricTemplateDropdown;
+		fabricTemplateDropdown.push_back({ ftCotton, "100% Cotton" });
+		fabricTemplateDropdown.push_back({ ftWool, "100% Wool" });
+		fabricTemplateDropdown.push_back({ ftWoolLycra, "95% Wool + 5% lycra" });
+		fabricTemplateDropdown.push_back({ ftPolyester, "100% Polyester" });
+
+		if (pGui->addFloatSlider("Fabric Density", mUserParams.fabricDensity, 0.001f, 10.0f))
+			updateMass();
+		if (pGui->addDropdown("Fabric Template", fabricTemplateDropdown, reinterpret_cast<uint32&>(mUserParams.fabricTemplate)))
+			mElasticProperties = ElasticProperties[mUserParams.fabricTemplate];
+        pGui->addFloat2Slider("Rayleigh Coefficients", mUserParams.rayleighCoefficients, 0.0f, 1.0f, false);
+
 		ClothModel::onGuiRender(pClothSample, pSample);
 		pGui->endGroup();
 	}
@@ -460,7 +545,14 @@ bool FiniteElementsMethod::onMouseEvent(ClothSample*, SampleCallbacks*, const Mo
 }
 
 template <>
-ClothModel* ClothModel::createClothModel<ClothModel::FiniteElementsMethod>()
+auto ClothModel::createClothModel<ClothModel::FiniteElementsMethod>(const ClothModel *baseParent) -> SharedPtr
 {
-	return new ::FiniteElementsMethod();
+	auto result = new ::FiniteElementsMethod();
+	if (baseParent != nullptr)
+	{
+		const auto *parent = static_cast<const ::FiniteElementsMethod*>(baseParent);
+		result->mUserParams = parent->mUserParams;
+	}
+
+	return SharedPtr(result);
 }

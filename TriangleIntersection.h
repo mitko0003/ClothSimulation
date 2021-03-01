@@ -13,3 +13,4 @@
 bool intersectTriangles(const glm::vec3 U[3], glm::vec3 V[3], glm::vec3 &response);
 bool intersectTriangle(const glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection);
 bool intersectTriangle(const glm::vec3 V[3], glm::vec3 rayOrigin, glm::vec3 rayDirection, glm::vec3 &intersection);
+glm::vec3 triangleClosestPoint(glm::vec3 V[3], const glm::vec3 &point);

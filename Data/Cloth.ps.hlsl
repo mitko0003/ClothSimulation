@@ -15,9 +15,7 @@ cbuffer PerFrameCB : register(b0)
 
 float3 AdjustNormalsToTranslucency(float3 light_dir, float3 normal)
 {
-    if (dot(normal, light_dir) < 0.0f)
-        normal = -normal;
-    return normalize(normal + light_dir / 5.0f);
+    return normalize(normal + light_dir * 1.0f);
 }
 
 float4 main(ClothPSIn pIn, bool bFrontFace : SV_IsFrontFace) : SV_TARGET

@@ -31,17 +31,78 @@
 
 using namespace Falcor;
 
+class ObjectController : std::enable_shared_from_this<ObjectController>
+{
+public:
+    using SharedPtr = std::shared_ptr<ObjectController>;
+    using SharedConstPtr = std::shared_ptr<const ObjectController>;
+
+    ObjectController(ClothSample*, const glm::vec3 &translation, const glm::vec3 &scale);
+    void renderScene(ClothSample*, SampleCallbacks*);
+    void onGuiRender(ClothSample*, SampleCallbacks*);
+    bool onMouseEvent(ClothSample*, SampleCallbacks*, const MouseEvent&);
+
+    glm::vec3 getPosition() const;
+    glm::vec3 getScale() const;
+
+private:
+    void activateGizmo(Gizmo::Type);
+
+    Scene::SharedPtr mpScene;
+    Picking::UniquePtr mpPicker;
+    SceneRenderer::SharedPtr mpSceneRenderer;
+    Gizmo::Gizmos mGizmos;
+    Gizmo::Type mActiveGizmoType = Gizmo::Type::Translate;
+    Scene::ModelInstance::SharedPtr mpProxyModelInstance;
+    bool mGizmoBeingDragged = false;
+    bool mUniformScale = true;
+};
+
+class PhysicsObject : public SelectableObject, std::enable_shared_from_this<PhysicsObject>
+{
+public:
+    using SharedPtr = std::shared_ptr<PhysicsObject>;
+    using SharedConstPtr = std::shared_ptr<const PhysicsObject>;
+
+    virtual vec3 getPosition() const = 0;
+    virtual vec3 getScale() const = 0;
+
+    virtual float intersect(const Ray &ray) = 0;
+    virtual vec3 intersectionResponse(vec3 V[3]) = 0;
+    virtual void render(ClothSample*, SampleCallbacks*) = 0;
+    virtual void applyController(const ObjectController*) = 0;
+
+    // Physics object implementing selectable interface is ugly but we still do not have an entity component system to solve this issue.
+    void testSelection(SelectionQuery&) override;
+    void makeSelection(ClothSample*, SelectionQuery&) override;
+    void loseSelection(ClothSample*) override;
+    bool loseSelectionOnMouseUp() override { return false; }
+    bool onMouseEvent(ClothSample*, SampleCallbacks*, const MouseEvent&) override;
+
+private:
+    ObjectController::SharedPtr mpController;
+};
+
 class ClothSample : public Renderer
 {
 public:
     void onLoad(SampleCallbacks* pSample, RenderContext* pRenderContext) override;
     void onFrameRender(SampleCallbacks* pSample, RenderContext* pRenderContext, const Fbo::SharedPtr& pTargetFbo) override;
-    void onShutdown(SampleCallbacks* pSample) override;
+	void onShutdown(SampleCallbacks* pSample) override {}
     void onResizeSwapChain(SampleCallbacks* pSample, uint32_t width, uint32_t height) override;
     bool onKeyEvent(SampleCallbacks* pSample, const KeyboardEvent& keyEvent) override;
     bool onMouseEvent(SampleCallbacks* pSample, const MouseEvent& mouseEvent) override;
-    void onDataReload(SampleCallbacks* pSample) override;
+	void onDataReload(SampleCallbacks* pSample) override {}
     void onGuiRender(SampleCallbacks* pSample, Gui* pGui) override;
+	void showDirectionHelper(const vec3&, float time = 2.0f);
+	void drawVector(const vec3 &vector, const vec3 &position);
+    vec3 getWindVelocity() const;
+
+    // Gui::addFloatSlider ignores displayFormat. Use this function until a Falcor version with fix comes.
+    static bool addFloatSlider(const char label[], float& var, float minVal, float maxVal, bool sameLine, const char* displayFormat = "%.3f");
+
+	Scene::SharedPtr mpScene;
+	SceneRenderer::SharedPtr mpSceneRenderer;
 
 	Camera::SharedPtr mpCamera;
 	DirectionalLight::SharedPtr mpDirLight;
@@ -54,6 +115,9 @@ public:
 	Model::SharedPtr mpDbgUnitCylinder;
 	Model::SharedPtr mpDbgUnitCone;
 
+    std::vector<PhysicsObject::SharedPtr> mPhysicsObjects;
+    ObjectController::SharedPtr mpObjectController;
+
 private:
     static const char *ModelPS;
 	static const char *ModelUnitSphere;
@@ -61,9 +125,6 @@ private:
 	static const char *ModelUnitCone;
 
     static const char *SkyBoxTextures[];
-
-	static const int32_t ClothSizeX;
-	static const int32_t ClothSizeY;
 
     SkyBox::SharedPtr mpSkybox;
     Sampler::SharedPtr mpTriLinearSampler;
@@ -80,12 +141,30 @@ private:
     SixDoFCameraController mSixDoFCameraController;
 
     CameraController& getActiveCameraController();
+	void updateClothModel();
 
-    glm::vec3 mLightDirection;
-	float32 mAirTemperature;
+    vec3 mWindVelocity = vec3(0.0f);
+    vec3 mWindDirection = vec3(1.0f, 0.0f, 0.0f);
+    vec3 mWindDriftDirection = vec3(0.0f);
+    float mWindDriftTimeTotal = 1.0f;
+    float mWindDriftTimeNow = 0.0f;
+    float mWindDriftStrength = 0.5f;
+    float mWindStrength = 0.0f;
+    void simulateWind(float deltaTime);
+
+	vec3 mHelperDirection;
+    vec3 mLightDirection;
 
     float mPrevTime;
+	float mHelperEndTime;
 
-	ClothModel::EType mClothModel;
-    ClothModel *mClothPatch;
+	vec2 mClothPatchSize = vec2(1.0f, 1.0f);
+	ivec2 mClothPatchTessellation = ivec2(11, 11);
+	ClothModel::EType mClothModelType = ClothModel::ParticleSpringModel;
+
+    SelectableObject *mpSelectedObject;
+
+    ClothModel::SharedPtr mClothPatch;
 };
+
+void GetMouseRay(const MouseEvent& mouseEvent, const CameraData &cameraData, vec3 &rayOrigin, vec3 &rayDirection);
