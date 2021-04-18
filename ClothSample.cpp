@@ -291,8 +291,8 @@ CameraController& ClothSample::getActiveCameraController()
 
 void ClothSample::updateClothModel()
 {
-	mClothPatch = ClothModel::createClothModel(mClothModelType, mClothPatch.get());
-	mClothPatch->init(mClothPatchSize, mClothPatchTessellation);
+	mpClothModel = ClothModel::createClothModel(mClothModelType, mpClothModel.get());
+	mpClothModel->init(mClothPatchSize, mClothPatchTessellation);
 }
 
 void ClothSample::onGuiRender(SampleCallbacks* pSample, Gui* pGui)
@@ -320,13 +320,16 @@ void ClothSample::onGuiRender(SampleCallbacks* pSample, Gui* pGui)
 
 	if (pGui->beginGroup("Cloth Setup", true))
 	{
+        if (pGui->addButton("Restart"))
+            updateClothModel();
+
 		Gui::DropdownList clothModelDropdown;
 		clothModelDropdown.push_back({ ClothModel::FiniteElementsMethod, "Finite Elements Method" });
 		clothModelDropdown.push_back({ ClothModel::ParticleSpringModel, "Particle Spring Model" });
-		auto dirtyClothModel = pGui->addDropdown("Model", clothModelDropdown, reinterpret_cast<uint32_t&>(mClothModelType));
+		auto dirtyClothModel = pGui->addDropdown("Model", clothModelDropdown, reinterpret_cast<uint32_t&>(mClothModelType), true);
 
-		dirtyClothModel |= pGui->addInt2Slider("Cloth Patch Size", mClothPatchTessellation, 4, 128);
-		dirtyClothModel |= pGui->addFloat2Slider("Cloth Patch Tessellation", mClothPatchSize, 0.2f, 10.0f);
+		dirtyClothModel |= pGui->addInt2Slider("Cloth Patch Tessellation", mClothPatchTessellation, 4, 128);
+		dirtyClothModel |= pGui->addFloat2Slider("Cloth Patch Size", mClothPatchSize, 0.2f, 10.0f);
 
 		if (dirtyClothModel)
 			updateClothModel();
@@ -343,7 +346,7 @@ void ClothSample::onGuiRender(SampleCallbacks* pSample, Gui* pGui)
 		pGui->endGroup();
 	}
 
-	mClothPatch->onGuiRender(this, pSample);
+	mpClothModel->onGuiRender(this, pSample);
 }
 
 void ClothSample::onLoad(SampleCallbacks* pSample, RenderContext* pRenderContext)
@@ -410,7 +413,7 @@ void ClothSample::onFrameRender(SampleCallbacks* pSample, RenderContext* pRender
 
 	mpScene->deleteAllModels();
 	simulateWind(deltaTime);
-	mClothPatch->simulate(this, deltaTime);
+	mpClothModel->simulate(this, deltaTime);
     mpSkybox->render(pRenderContext, mpCamera.get());
 
     const auto showVectorField = [&](BoundingBox box, vec3 step, vec3 direction) -> void
@@ -427,7 +430,7 @@ void ClothSample::onFrameRender(SampleCallbacks* pSample, RenderContext* pRender
     mpDirLight->setWorldDirection(mLightDirection);
 
     getActiveCameraController().update();
-	mClothPatch->render(this, pSample);
+	mpClothModel->render(this, pSample);
 
     for (const auto &physicsObject : mPhysicsObjects)
         physicsObject->render(this, pSample);
@@ -474,7 +477,7 @@ bool ClothSample::onMouseEvent(SampleCallbacks* pSample, const MouseEvent& mouse
 
         for (const auto &physicsObject : mPhysicsObjects)
             physicsObject->testSelection(selectionQuery);
-        mClothPatch->testSelection(selectionQuery);
+        mpClothModel->testSelection(selectionQuery);
 
         if (selectionQuery.closestObject != nullptr)
         {
@@ -579,7 +582,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 {
     ClothSample::UniquePtr pRenderer = std::make_unique<ClothSample>();
     SampleConfig config;
-    config.windowDesc.title = "Falcor Project Template";
+    config.windowDesc.title = "Cloth Simulator";
     config.windowDesc.resizableWindow = true;
     config.deviceDesc.enableVsync = true;
     Sample::run(config, pRenderer);

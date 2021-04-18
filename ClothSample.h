@@ -158,13 +158,13 @@ private:
     float mPrevTime;
 	float mHelperEndTime;
 
-	vec2 mClothPatchSize = vec2(1.0f, 1.0f);
-	ivec2 mClothPatchTessellation = ivec2(11, 11);
+	vec2 mClothPatchSize = vec2(5.0f);
+	ivec2 mClothPatchTessellation = ivec2(12, 12);
 	ClothModel::EType mClothModelType = ClothModel::ParticleSpringModel;
 
     SelectableObject *mpSelectedObject;
 
-    ClothModel::SharedPtr mClothPatch;
+    ClothModel::SharedPtr mpClothModel;
 };
 
 void GetMouseRay(const MouseEvent& mouseEvent, const CameraData &cameraData, vec3 &rayOrigin, vec3 &rayDirection);

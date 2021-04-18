@@ -3,27 +3,36 @@
 #include "TriangleIntersection.h"
 #include "ClothSample.h"
 #include "glm/gtc/random.hpp"
-#pragma optimize("", off)
+
 using float1 = float32_t;
 using float3 = f32vec3;
-
+#pragma optimize("", off)
 struct IBaseParticle
 {
     float3 mPosition;
+    float3 mForces;
     float3 mSurfaceNormal;
     float mSurfaceArea;
     bool mbStationary;
 
     IBaseParticle() :
-        mPosition(0.0f), mbStationary(false) {}
+        mPosition(0.0f), mForces(0.0f), mbStationary(false) {}
     virtual ~IBaseParticle() {}
 
-    virtual void simulate(float deltaTime, float3 acceleration) = 0;
+    virtual void simulate(float deltaTime, float mass) = 0;
     virtual float3 getVelocity(float deltaTime) const = 0;
 
-    virtual void setPosition(const float3 &position)
+    virtual void init(const float3 &position)
     {
         mPosition = position;
+    }
+
+    virtual void init(const IBaseParticle *oldParticle)
+    {
+        mSurfaceNormal = oldParticle->mSurfaceNormal;
+        mSurfaceArea = oldParticle->mSurfaceArea;
+        mbStationary = oldParticle->mbStationary;
+        init(oldParticle->mPosition);
     }
 };
 
@@ -34,8 +43,9 @@ struct TEulerParticle : public IBaseParticle
     TEulerParticle() :
         mVelocity(0.0f) {}
 
-    void simulate(float deltaTime, float3 acceleration) final override
+    void simulate(float deltaTime, float mass) final override
     {
+        const auto acceleration = mForces / mass;
         mVelocity += acceleration * deltaTime;
         mPosition += mVelocity * deltaTime;
     }
@@ -53,12 +63,12 @@ struct IVerletWithoutVelocityParticle : public IBaseParticle
     IVerletWithoutVelocityParticle() :
         mPrevPosition(mPosition) {}
 
-    float3 getVelocity(float deltaTime) const final override
+    float3 getVelocity(float deltaTime) const override
     {
         return (mPosition - mPrevPosition) / deltaTime;
     }
 
-    virtual void setPosition(const float3 &position) final override
+    void init(const float3 &position) final override
     {
         mPrevPosition = mPosition = position;
     }
@@ -68,9 +78,10 @@ struct TStormerVerletParticle : public IVerletWithoutVelocityParticle
 {
     using IVerletWithoutVelocityParticle::IVerletWithoutVelocityParticle;
 
-    void simulate(float deltaTime, float3 acceleration) final override
+    void simulate(float deltaTime, float mass) final override
     {
         const auto prevPosition = mPosition;
+        const auto acceleration = mForces / mass;
         mPosition += mPosition - mPrevPosition + acceleration * Square(deltaTime);
         mPrevPosition = prevPosition;
     }
@@ -82,9 +93,10 @@ struct TVerletBasicNonConstTimeDeltaParticle : public IVerletWithoutVelocityPart
 
     float32 mPrevDeltaTime = 0.01f;
 
-    void simulate(float deltaTime, float3 acceleration) final override
+    void simulate(float deltaTime, float mass) final override
     {
         const auto prevPosition = mPosition;
+        const auto acceleration = mForces / mass;
         mPosition = mPosition + (mPosition - mPrevPosition) * deltaTime / mPrevDeltaTime + acceleration * Square(deltaTime);
         mPrevPosition = prevPosition;
         mPrevDeltaTime = deltaTime;
@@ -97,9 +109,15 @@ struct TVerletImprovedNonConstTimeDeltaParticle : public IVerletWithoutVelocityP
 
     float32 mPrevDeltaTime = 0.01f;
 
-    void simulate(float deltaTime, float3 acceleration) final override
+    float3 getVelocity(float deltaTime) const final override
+    {
+        return (mPosition - mPrevPosition) / mPrevDeltaTime;
+    }
+
+    void simulate(float deltaTime, float mass) final override
     {
         const auto prevPosition = mPosition;
+        const auto acceleration = mForces / mass;
         mPosition = mPosition + (mPosition - mPrevPosition) * (deltaTime / mPrevDeltaTime) + acceleration * ((deltaTime + mPrevDeltaTime) * deltaTime * 0.5f);
         mPrevPosition = prevPosition;
         mPrevDeltaTime = deltaTime;
@@ -114,8 +132,9 @@ struct TVelocityVerletParticle : public IBaseParticle
     TVelocityVerletParticle() :
         mVelocity(0.0f), mAcceleration(0.0f) {}
 
-    void simulate(float deltaTime, float3 acceleration) final override
+    void simulate(float deltaTime, float mass) final override
     {
+        const auto acceleration = mForces / mass;
         const auto halfStepVelocity = getVelocity(deltaTime);
         mPosition = mPosition + halfStepVelocity * deltaTime;
         mVelocity = halfStepVelocity + acceleration * (deltaTime * 0.5f);
@@ -131,7 +150,6 @@ struct TVelocityVerletParticle : public IBaseParticle
 enum ENumericalMethod
 {
     ExplicitEuler,
-    RungeKutta,
 	StormerVerlet,
     VelocityVerlet,
 	VerletBasicNonConstTimeDelta,
@@ -147,7 +165,6 @@ struct
 	bool mbConstantTimeDelta;
 } NumericalMethodProperties[NumericalMethodCount] = {
 	{ "Explicit Euler Method", sizeof(TEulerParticle), true },
-	{ "Runge-Kutta Method", sizeof(TEulerParticle), true },
 	{ "Stormer-Verlet Method", sizeof(TStormerVerletParticle), true },
 	{ "Velocity Verlet Method", sizeof(TVelocityVerletParticle), true },
 	{ "Verlet non-const time delta", sizeof(TVerletBasicNonConstTimeDeltaParticle), false },
@@ -198,7 +215,7 @@ struct ParticleSpringModel final : public ClothModel
 	{
 		float32 airTemperature = 20.0f;
 		float32 timeStep = 0.1f;
-		float32 particleMass = 0.1f;
+		float32 fabricDensity = 0.1f;
         float32 springStiffness = 0.0f;
         float32 dampingCoefficient = 0.1f;
 		ENumericalMethod numericalMethod = StormerVerlet;
@@ -265,8 +282,7 @@ static uint8* createParticles(ENumericalMethod numericalMethod, int32 count, std
         auto *newParticle = reinterpret_cast<IBaseParticle*>(particlesMemory + i * particleSize);
         switch (numericalMethod)
         {
-        case ExplicitEuler:
-        case RungeKutta: new (newParticle) TEulerParticle(); break;
+        case ExplicitEuler: new (newParticle) TEulerParticle(); break;
         case VelocityVerlet: new (newParticle) TVelocityVerletParticle(); break;
         case StormerVerlet: new (newParticle) TStormerVerletParticle(); break;
         case VerletBasicNonConstTimeDelta: new (newParticle) TVerletBasicNonConstTimeDeltaParticle(); break;
@@ -341,13 +357,14 @@ float32_t ParticleSpringModel::computeVoronoiArea(int32 particle) const
 void ParticleSpringModel::init(const vec2 &size, const ivec2 &tessellation)
 {
 	std::vector<float3> positions;
-	const auto vertexCount = createRectMesh(size, tessellation, positions, mTriangles, mMesh);
+    std::vector<float2> texCoords;
+	const auto vertexCount = createRectMesh(size, tessellation, positions, texCoords, mTriangles, mMesh);
 
 	mSize = size;
 	mTessellation = tessellation;
     mpParticlesMemory = createParticles(mUserParams.numericalMethod, vertexCount,
         [&](int32 index, IBaseParticle *particle) {
-            particle->setPosition(positions[index]);
+            particle->init(positions[index]);
         }
     );
 
@@ -358,7 +375,7 @@ void ParticleSpringModel::init(const vec2 &size, const ivec2 &tessellation)
     for (int32 vertex = 0; vertex < vertexCount; ++vertex)
         getParticle(vertex)->mSurfaceArea = computeVoronoiArea(vertex);
 
-	sharedInit();
+	sharedInit(texCoords);
 }
 
 void ParticleSpringModel::init(const Model*)
@@ -373,7 +390,7 @@ vec3 ParticleSpringModel::getVertexPosition(int32 vertexIndex) const
 
 static constexpr struct
 {
-	float32 mTemperature, mDensity;
+	float32 mTemperature, mDensity; // Celsius, kg/m^3
 } AirPropertiesTable[] = {
 	{ -25.0f, 1.4224f },
 	{ -20.0f, 1.3943f },
@@ -437,7 +454,7 @@ void ParticleSpringModel::simulate(ClothSample *pClothSample, float deltaTime)
 	{
 		TimeIteration = [&]() -> bool
 		{
-			if (mTimeRemainder > 0.0001f)
+			if (mTimeRemainder > 0.001f)
 			{
                 deltaTime = min(mTimeRemainder, mUserParams.timeStep);
                 mTimeRemainder -= deltaTime;
@@ -448,13 +465,15 @@ void ParticleSpringModel::simulate(ClothSample *pClothSample, float deltaTime)
 	}
 
 	const auto dragCoefficient = 0.47f;
-	const auto area = mSize.x * mSize.y / (mTessellation.x * mTessellation.y);
 	const auto ro = GetAirDensity(mUserParams.airTemperature);
     const auto gridStep = mSize / vec2(mTessellation - 1);
 	const auto gravityAcceleration = float3(0.0f, -9.8067f, 0.0f);
     const auto windVelocity = pClothSample->getWindVelocity();
     const auto Cd = ClothModel::mUserParams.windDragCoefficient;
     const auto Cl = ClothModel::mUserParams.windLiftCoefficient;
+
+    const auto patchArea = mSize.x * mSize.y;
+    const auto particleMass = (mUserParams.fabricDensity * patchArea) / (mTessellation.x * mTessellation.y);
 
     while (TimeIteration())
     {
@@ -487,24 +506,32 @@ void ParticleSpringModel::simulate(ClothSample *pClothSample, float deltaTime)
                 }
 
                 const auto v_p = particle->getVelocity(deltaTime);
-                const auto v_r = windVelocity - v_p;
+                const auto dampingForce = -mUserParams.dampingCoefficient * v_p;
+
                 const auto &A = particle->mSurfaceArea;
+                const auto v_r = windVelocity - v_p;
                 auto n = particle->mSurfaceNormal;
                 if (dot(n, v_r) > 0.0f) n *= -1; // Flip the surface normal based on which side the wind blows on.
 
                 // Equation from: "Simulating Wind Effects on Cloth and Hair in Disney's Frozen"
                 const auto windForce = 0.5f * ro * A * ((Cd - Cl) * dot(v_r, n) * v_r + Cl * length(v_p) * n);
-				const auto windAcceleration = windForce / mUserParams.particleMass;
-                
-                const auto dampingForce = -mUserParams.dampingCoefficient * v_p;
 
-				const auto acceleration = gravityAcceleration + windAcceleration + dampingForce;
-                particle->simulate(deltaTime, acceleration);
+                particle->mForces = particleMass * gravityAcceleration + windForce + dampingForce + springForce;
 
 				if (ClothModel::mUserParams.bShowWindEffect)
-					pClothSample->drawVector(windAcceleration, particle->mPosition);
+					pClothSample->drawVector(windForce, particle->mPosition);
 			}
 		}
+
+        for (int32_t y = 0; y < mTessellation.y; ++y)
+        {
+            for (int32_t x = 0; x < mTessellation.x; ++x)
+            {
+                auto particle = getParticle(x, y);
+                if (particle->mbStationary) continue;
+                particle->simulate(deltaTime, particleMass);
+            }
+        }
 
         for (int32_t y = 0; y < mTessellation.y; ++y)
         {
@@ -598,8 +625,7 @@ void ParticleSpringModel::onGuiRender(ClothSample *pClothSample, SampleCallbacks
             auto newParticles = createParticles(ENumericalMethod(newNumericalMethod), mTessellation.x * mTessellation.y,
                 [&](int32 index, IBaseParticle *particle) {
                     const auto *oldParticle = getParticle(index);
-                    particle->setPosition(oldParticle->mPosition);
-                    particle->mbStationary = oldParticle->mbStationary;
+                    particle->init(oldParticle);
                 }
             );
             delete[] mpParticlesMemory;
@@ -613,8 +639,8 @@ void ParticleSpringModel::onGuiRender(ClothSample *pClothSample, SampleCallbacks
             pClothSample->addFloatSlider("Max Time Step", mUserParams.timeStep, 0.0001f, 0.1f, false, "%.4f");
         pGui->addFloatSlider("Damping Coefficient", mUserParams.dampingCoefficient, 0.0f, 1.0f);
 		pGui->addFloatSlider("Air Temperature", mUserParams.airTemperature, -25.0f, 35.0f);
-		pGui->addFloatSlider("Particle Mass", mUserParams.particleMass, 0.0001f, 1.0f);
-        pGui->addFloatSlider("Spring Stiffness", mUserParams.springStiffness, 0.0f, 10.0f);
+        pClothSample->addFloatSlider("Fabric Density", mUserParams.fabricDensity, 0.0001f, 1.0f, false, "%.4f");
+        pGui->addFloatSlider("Spring Stiffness", mUserParams.springStiffness, 0.0f, 100.0f);
 		
 		pGui->addCheckBox("Use Structural Springs", mUserParams.useSprings[SpringTypeStructural]);
 		pGui->addCheckBox("Use Shear Springs", mUserParams.useSprings[SpringTypeShear]);

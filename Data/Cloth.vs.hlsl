@@ -5,6 +5,7 @@ struct ClothVSIn
     float3 position : POSITION;
     float3 normal : NORMAL;
     float3 color : COLOR;
+    float2 uv : TEXCOORD;
 };
 
 struct ClothVSOut
@@ -12,6 +13,7 @@ struct ClothVSOut
     float4 pos : SV_POSITION;
     linear float3 posW : POS_W;
     linear float3 normal : NORMAL;
+    linear float2 uv : TEXCOORD;
     nointerpolation float3 color : COLOR;
 };
 
@@ -31,6 +33,7 @@ ClothVSOut main(ClothVSIn vIn)
 
     vOut.normal = vIn.normal;
     vOut.color = vIn.color;
+    vOut.uv = vIn.uv;
 
     return vOut;
 }

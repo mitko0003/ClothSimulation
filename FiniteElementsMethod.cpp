@@ -2,48 +2,46 @@
 #include "External/HalfEdge/trimesh.h"
 
 #include "ClothSample.h"
-#pragma optimize("", off)
-static constexpr float32_t ShearModulus(float32_t E45, float32_t V45)
+
+static constexpr float64_t ShearModulus(float64_t E45, float64_t V45)
 {
-	return E45 * 0.5f / (1.0f + V45);
+	return E45 * 0.5 / (1.0 + V45);
 }
 
-struct TElasticProperties // For orthotropic materials
+struct TMaterialProperties // For orthotropic materials
 {
-	float32_t Ex, Ey;    // Young’s modulus in MPa
-	float32_t Vxy, Vyx;  // Poisson’s ratio
-	float32_t Es;        // Shear modulus
+    const char *Name;
+    float32_t Density;   // Density in kg/m^2
+	float64_t Ex, Ey;    // Young’s modulus in KPa
+	float64_t Vxy, Vyx;  // Poisson’s ratio
+	float64_t Es;        // Shear modulus in KPa
 
 	Eigen::Matrix<float32_t, 3, 3> getHookeLawMatrix() const
 	{
 		return Eigen::Matrix<float32_t, 3, 3>({
-			{       Ex / (1.0f - Vxy * Vyx), Ex * Vyx / (1.0f - Vxy * Vyx), 0.0f },
-			{ Ey * Vxy / (1.0f - Vxy * Vyx),       Ey / (1.0f - Vxy * Vyx), 0.0f },
-			{                          0.0f,                          0.0f,   Es }
+			{ float32_t(      Ex / (1.0 - Vxy * Vyx) * 1e3), float32_t(Ex * Vyx / (1.0 - Vxy * Vyx) * 1e3),          0.0f },
+			{ float32_t(Ey * Vxy / (1.0 - Vxy * Vyx) * 1e3), float32_t(      Ey / (1.0 - Vxy * Vyx) * 1e3),          0.0f },
+			{                                           0.0,                                          0.0f, float32_t(Es * 1e3) }
 		});
 	}
 };
 
-enum EFabricTemplate
+static constexpr TMaterialProperties MaterialTemplates[] =
 {
-	ftCotton,    // 100% Cotton
-	ftWool,      // 100% Wool
-	ftWoolLycra, // 95% Wool + 5% lycra
-	ftPolyester, // 100% Polyester
+    // Material parameters from:
+    // A Fast Finite Element Solution for Cloth Modelling
+    { "Wool"        , 0.26f,  866.0 * 1e-3, 1391.0 * 1e-3, 0.261, 0.162, 0.51 * 1e-3 },
+    { "Viscose"     , 0.23f,  245.0 * 1e-3,  366.0 * 1e-3, 0.249, 0.167, 0.38 * 1e-3 },
+    { "Polyacrylics", 0.17f, 3057.0 * 1e-3, 1534.0 * 1e-3, 0.150, 0.299, 1.22 * 1e-3 },
+    { "Polyester"   , 0.26f, 2400.0 * 1e-3, 3600.0 * 1e-3, 0.250, 0.167, 5.23 * 1e-3 },
 
-	ftCount
-};
-
-// Material parameters from:
-// Determination of the Elastic Constants of 
-// Plain Woven Fabrics by a Tensile Test in Various Directions
-static constexpr TElasticProperties ElasticProperties[ftCount] =
-{
-	{  245.0f,  366.0f, 0.566f, 366.0f * 0.566f / 245.0f, 0.38f }, // wool from "A Fast Finite Element Solution for Cloth Modelling"
-	// { 32.559f, 12.436f, 0.566f, 0.243f, ShearModulus(0.821f, 1.136f) }, // 100% Cotton
-	{ 21.860f,  8.149f, 0.705f, 0.277f, ShearModulus(0.170f, 1.377f) }, // ftWool
-	{  0.250f,  0.851f, 0.071f, 0.196f, ShearModulus(0.076f, 0.599f) }, // ftWoolLycra
-	{  5.152f, 11.674f, 0.381f, 0.779f, ShearModulus(0.478f, 1.366f) }, // ftPolyester
+    // Material parameters from:
+    // Determination of the Elastic Constants of 
+    // Plain Woven Fabrics by a Tensile Test in Various Directions
+	{ "100% Cotton"        , 0.1503f, 32.559 * 1e3, 12.436 * 1e3, 0.566, 0.216, ShearModulus(0.821, 1.136) * 1e3 },
+	{ "100% Wool"          , 0.2348f, 21.860 * 1e3,  8.149 * 1e3, 0.705, 0.263, ShearModulus(0.170, 1.377) * 1e3 },
+	{ "95% Wool + 5% lycra", 0.1782f,  0.250 * 1e3,  0.851 * 1e3, 0.071, 0.244, ShearModulus(0.076, 0.599) * 1e3 },
+	{ "100% Polyester"     , 0.1646f,  5.152 * 1e3, 11.674 * 1e3, 0.381, 0.864, ShearModulus(0.478, 1.366) * 1e3 },
 };
 
 struct TParticle
@@ -52,7 +50,7 @@ struct TParticle
 	Eigen::Vector<float32_t, 3> mV;
 	Eigen::Vector<float32_t, 3> mXn;
 	Eigen::Vector<float32_t, 3> mX0;
-    bool mbStationary;
+    bool mbStationary = false;
 
 	template <bool deformed = true>
 	Eigen::Vector<float32_t, 3>& getPosition()
@@ -73,18 +71,18 @@ struct FiniteElementsMethod : public ClothModel
 	std::vector<float32_t> mTrianglesArea;
 
     float32 mTimeRemainder = 0.0f;
-	TElasticProperties mElasticProperties;
 
 	struct
 	{
         float32 timeStep = 0.01f;
-		EFabricTemplate fabricTemplate = ftCotton;
-		float32 fabricDensity = 1.0f;
+		int32 materialTemplate = 0;
+        TMaterialProperties materialProperties;
         vec2 rayleighCoefficients = vec2(0.01f, 0.01f);
 	} mUserParams;
 
 	FiniteElementsMethod()
 	{
+        mUserParams.materialProperties = MaterialTemplates[mUserParams.materialTemplate];
 		mName = "Finite Elements Method";
 	}
 
@@ -130,11 +128,9 @@ static float32_t getTriangleArea(const trimesh::triangle_t &triangle, const std:
 
 void FiniteElementsMethod::init(const vec2 &size, const ivec2 &tessellation)
 {
-	mUserParams.fabricTemplate = ftCotton;
-	mElasticProperties = ElasticProperties[mUserParams.fabricTemplate];
-
 	std::vector<float3> positions;
-	const auto vertexCount = createRectMesh(size, tessellation, positions, mTriangles, mMesh);
+	std::vector<float2> texCoords;
+	const auto vertexCount = createRectMesh(size, tessellation, positions, texCoords, mTriangles, mMesh);
 	
 	for (const auto &position : positions)
 	{
@@ -154,7 +150,7 @@ void FiniteElementsMethod::init(const vec2 &size, const ivec2 &tessellation)
 		mTrianglesArea.emplace_back(getTriangleArea<false>(triangle, mParticles));
 
 	updateMass();
-	sharedInit();
+	sharedInit(texCoords);
 }
 
 void FiniteElementsMethod::init(const Model *model)
@@ -205,8 +201,9 @@ vec3 FiniteElementsMethod::getVertexPosition(int32 vertexIndex) const
 
 void FiniteElementsMethod::updateMass()
 {
+    const auto &materialProperties = mUserParams.materialProperties;
 	for (int32 i = 0, size = int32(mParticles.size()); i < size; ++i)
-		mParticles[i].mM = getVoronoiArea(i) * mUserParams.fabricDensity;
+		mParticles[i].mM = getVoronoiArea(i) * materialProperties.Density;
 }
 
 float32_t FiniteElementsMethod::getVoronoiArea(int32 particle)
@@ -373,7 +370,8 @@ Eigen::Matrix<float32_t, 9, 6> FiniteElementsMethod::getPlanarProjectedRotation(
 
 Eigen::Matrix<float32_t, 6, 6> FiniteElementsMethod::getElementStiffnessMatrix(const Eigen::Vector<float32_t, 2>(&triangle)[3], float32 A) const
 {
-	const auto C = mElasticProperties.getHookeLawMatrix();
+    const auto &materialProperties = mUserParams.materialProperties;
+	const auto C = materialProperties.getHookeLawMatrix();
 	const auto B = getTriangleShapeMatrix(triangle, A);
 	return A * B.transpose() * C * B;
 }
@@ -470,9 +468,11 @@ void FiniteElementsMethod::assembleExternalForces(Eigen::VectorXf &fext) const
 
 void FiniteElementsMethod::simulate(ClothSample*, float32_t delta_t)
 {
-    for (mTimeRemainder += delta_t, delta_t = mUserParams.timeStep; mTimeRemainder >= delta_t;)
-    {
-        mTimeRemainder -= delta_t;
+    //for (mTimeRemainder += delta_t, delta_t = mUserParams.timeStep; mTimeRemainder >= delta_t;)
+    { // The model cannot be simulated with interactive framerates.
+        //mTimeRemainder -= delta_t;
+        if (delta_t == 0.0f) return;
+        delta_t = mUserParams.timeStep;
         Eigen::MatrixXf K(3 * mParticles.size(), 3 * mParticles.size());
         Eigen::VectorXf f0(3 * mParticles.size());
         assembleCorotatedStiffnessMatrix(K, f0);
@@ -504,8 +504,6 @@ void FiniteElementsMethod::simulate(ClothSample*, float32_t delta_t)
                 particle.mXn = particle.mX0; // TODO: implement constraints interface
             }
         }
-
-        break; // The model cannot be simulated with interactive framerates.
     }
 }
 
@@ -522,16 +520,35 @@ void FiniteElementsMethod::onGuiRender(ClothSample *pClothSample, SampleCallback
 	{
         pClothSample->addFloatSlider("Const Time Step", mUserParams.timeStep, 0.0001f, 0.1f, false, "%.4f");
 
-		Gui::DropdownList fabricTemplateDropdown;
-		fabricTemplateDropdown.push_back({ ftCotton, "100% Cotton" });
-		fabricTemplateDropdown.push_back({ ftWool, "100% Wool" });
-		fabricTemplateDropdown.push_back({ ftWoolLycra, "95% Wool + 5% lycra" });
-		fabricTemplateDropdown.push_back({ ftPolyester, "100% Polyester" });
+		Gui::DropdownList materialTemplateDropdown;
+        for (uint32 material = 0u; material < arraysize(MaterialTemplates); ++material)
+            materialTemplateDropdown.push_back({ material, MaterialTemplates[material].Name });
 
-		if (pGui->addFloatSlider("Fabric Density", mUserParams.fabricDensity, 0.001f, 10.0f))
-			updateMass();
-		if (pGui->addDropdown("Fabric Template", fabricTemplateDropdown, reinterpret_cast<uint32&>(mUserParams.fabricTemplate)))
-			mElasticProperties = ElasticProperties[mUserParams.fabricTemplate];
+        auto &materialProperties = mUserParams.materialProperties;
+        if (pGui->addDropdown("Fabric Template", materialTemplateDropdown, reinterpret_cast<uint32&>(mUserParams.materialTemplate)))
+        {
+            materialProperties = MaterialTemplates[mUserParams.materialTemplate];
+            updateMass();
+        }
+
+        if (pGui->addFloatSlider("Fabric Density", materialProperties.Density, 0.001f, 10.0f))
+            updateMass();
+        auto youngModulus = vec2(float32(materialProperties.Ex), float32(materialProperties.Ey));
+        if (pGui->addFloat2Slider("Young’s modulus", youngModulus, 0.0f, 100.0f * 1e3f, false))
+        {
+            materialProperties.Ex = youngModulus.x;
+            materialProperties.Ey = youngModulus.y;
+        }
+        auto poissonRatio = vec2(materialProperties.Vxy, materialProperties.Vyx);
+        if (pGui->addFloat2Slider("Poisson’s ratio", poissonRatio, 0.0f, 1.0f, false))
+        {
+            materialProperties.Vxy = poissonRatio.x;
+            materialProperties.Vyx = poissonRatio.y;
+        }
+        auto shearModulus = float32(materialProperties.Es);
+        if (pGui->addFloatSlider("Shear modulus", shearModulus, 0.0f, 1e3f, false))
+            materialProperties.Es = shearModulus;
+
         pGui->addFloat2Slider("Rayleigh Coefficients", mUserParams.rayleighCoefficients, 0.0f, 1.0f, false);
 
 		ClothModel::onGuiRender(pClothSample, pSample);

@@ -46,6 +46,15 @@ struct ClothModel : NonCopyable, public SelectableObject, public std::enable_sha
 	static GraphicsVars::SharedPtr spClothVars;
 	static VertexLayout::SharedPtr spVertexLayout;
 
+    struct TTextureSet
+    {
+        std::string Name;
+        Texture::SharedPtr BaseColorMap;
+        Texture::SharedPtr RoughnessMap;
+        Texture::SharedPtr NormalMap;
+    };
+    static std::vector<TTextureSet> sTextureSets;
+
 	std::string mName;
 
 	std::vector<trimesh::triangle_t> mTriangles;
@@ -55,6 +64,7 @@ struct ClothModel : NonCopyable, public SelectableObject, public std::enable_sha
 	Buffer::SharedPtr mpVBNormals;
 	Buffer::SharedPtr mpVBColors;
 	Buffer::SharedPtr mpIndexBuffer;
+	Buffer::SharedPtr mpVBTexCoords;
 
 	Vao::SharedPtr mpVao;
 
@@ -81,12 +91,12 @@ struct ClothModel : NonCopyable, public SelectableObject, public std::enable_sha
     virtual bool onMouseEvent(ClothSample*, SampleCallbacks*, const MouseEvent&) { return false; }
 
 	static void init();
-	static int32 createRectMesh(const vec2 &size, const ivec2 &tessellation, std::vector<float3> &position, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh);
+	static int32 createRectMesh(const vec2 &size, const ivec2 &tessellation, std::vector<float3> &position, std::vector<float2> &texCoords, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh);
 
 	static SharedPtr createClothModel(EType type, const ClothModel *parent);
 
 protected:
-	void sharedInit();
+	void sharedInit(const std::vector<float2> &texCoords);
 
 	struct
 	{
@@ -97,7 +107,8 @@ protected:
 		bool bShowParticles = false;
 		bool bShowWireframe = false;
 		bool bShowSelfCollisions = false;
-        vec3 baseColor = vec3(0.0f, 1.0f, 0.0f);
+        int32 textureSet = 0;
+        vec3 baseColor = vec3(0.0f, 255.0f / 255.0f, 84.0f / 255.0f);
 	} mUserParams;
 
 	template <EType type>

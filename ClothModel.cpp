@@ -2,15 +2,18 @@
 #include "TriangleIntersection.h"
 #include "ClothSample.h"
 #include "ClothModel.h"
-
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#pragma optimize("", off)
 const char *ClothModel::ClothVS = "Cloth.vs.hlsl";
 const char *ClothModel::ClothPS = "Cloth.ps.hlsl";
 
 GraphicsProgram::SharedPtr ClothModel::spClothProgram = nullptr;
 GraphicsVars::SharedPtr ClothModel::spClothVars = nullptr;
 VertexLayout::SharedPtr ClothModel::spVertexLayout = nullptr;
+std::vector<ClothModel::TTextureSet> ClothModel::sTextureSets;
 
-int32 ClothModel::createRectMesh(const vec2 &size, const ivec2 &tessellation, std::vector<float3> &positions, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh)
+int32 ClothModel::createRectMesh(const vec2 &size, const ivec2 &tessellation, std::vector<float3> &positions, std::vector<float2> &texCoords, std::vector<trimesh::triangle_t> &triangles, trimesh::trimesh_t &mesh)
 {
 	const auto vertexCount = tessellation.x * tessellation.y;
 	const auto gridStep = size / vec2(tessellation - 1);
@@ -20,6 +23,7 @@ int32 ClothModel::createRectMesh(const vec2 &size, const ivec2 &tessellation, st
 		for (int32 x = 0; x < tessellation.x; ++x)
 		{
 			positions.emplace_back(float32(x) * gridStep.x - size.x * 0.5f, size.y * 0.5f - float32(y) * gridStep.y, 0.0f);
+            texCoords.emplace_back(float2(x, y) / float2(tessellation - 1));
 		}
 	}
 
@@ -69,6 +73,26 @@ void ClothModel::init()
 	VertexBufferLayout::SharedPtr pColorsLayout = VertexBufferLayout::create();
 	pColorsLayout->addElement("COLOR", 0, ResourceFormat::RGB32Float, 1, 2);
 	spVertexLayout->addBufferLayout(2, pColorsLayout);
+    VertexBufferLayout::SharedPtr pTexCoordsLayout = VertexBufferLayout::create();
+    pTexCoordsLayout->addElement("TEXCOORD", 0, ResourceFormat::RG16Unorm, 1, 3);
+    spVertexLayout->addBufferLayout(3, pTexCoordsLayout);
+
+    for (auto& file : fs::directory_iterator("Data/Materials/"))
+    {
+        const auto &ReadTexture = [=](const char *name, bool generateMipLevels, bool loadAsSrgb) -> Texture::SharedPtr
+        {
+            auto path = file.path().string() + "/" + name;
+            return createTextureFromFile(path, generateMipLevels, loadAsSrgb, Texture::BindFlags::ShaderResource);
+        };
+        std::string filename = file.path().filename().string();
+
+        TTextureSet textureSet;
+        textureSet.Name = file.path().filename().string();
+        textureSet.BaseColorMap = ReadTexture("BaseColor.png", true, true);
+        textureSet.RoughnessMap = ReadTexture("Roughness.png", true, false);
+        textureSet.NormalMap = ReadTexture("Normal.png", true, false);
+        sTextureSets.emplace_back(std::move(textureSet));
+    }
 
 	Program::DefineList defineList;
 
@@ -79,7 +103,7 @@ void ClothModel::init()
 	spClothVars = GraphicsVars::create(spClothProgram->getReflector());
 }
 
-void ClothModel::sharedInit()
+void ClothModel::sharedInit(const std::vector<float2> &texCoords)
 {
 	std::vector<uint16> vIndices;
 	for (const auto &triangle : mTriangles)
@@ -89,14 +113,22 @@ void ClothModel::sharedInit()
 		vIndices.emplace_back(uint16(triangle.v[2]));
 	}
 
+    std::vector<uint16> unormTexCoords;
+    for (const auto &uv : texCoords)
+    {
+        unormTexCoords.push_back(uint16_t(uv.x * std::numeric_limits<uint16_t>::max()));
+        unormTexCoords.push_back(uint16_t(uv.y * std::numeric_limits<uint16_t>::max()));
+    }
+
 	const auto vertexCount = mTriangles.size() * 3;
 
 	mpIndexBuffer = Buffer::create(vIndices.size() * sizeof(uint16_t), ResourceBindFlags::Index, Buffer::CpuAccess::None, vIndices.data());
 	mpVBPositions = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
 	mpVBNormals = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
 	mpVBColors = Buffer::create(vertexCount * sizeof(float32_t[3]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, nullptr);
-
-	Vao::BufferVec buffers{ mpVBPositions, mpVBNormals, mpVBColors };
+	mpVBTexCoords = Buffer::create(vertexCount * sizeof(uint16_t[2]), ResourceBindFlags::Vertex, Buffer::CpuAccess::Write, unormTexCoords.data());
+    
+	Vao::BufferVec buffers{ mpVBPositions, mpVBNormals, mpVBColors, mpVBTexCoords };
 	mpVao = Vao::create(Vao::Topology::TriangleList, spVertexLayout, buffers, mpIndexBuffer, ResourceFormat::R16Uint);
 
 	mpClothState = GraphicsState::create();
@@ -117,7 +149,7 @@ void ClothModel::getTriangleVertices(const trimesh::triangle_t &triangle, vec3 v
     vertices[0] = getVertexPosition(triangle[0]);
     vertices[1] = getVertexPosition(triangle[1]);
     vertices[2] = getVertexPosition(triangle[2]);
-};
+}
 
 vec3 ClothModel::getVertexNormal(int32 index) const
 {
@@ -235,6 +267,14 @@ void ClothModel::render(ClothSample *pClothSample, SampleCallbacks *pSample)
 	pClothSample->mpCamera->setIntoConstantBuffer(spClothVars->getConstantBuffer("InternalPerFrameCB").get(), "gCamera");
 	pClothSample->mpDirLight->setIntoProgramVars(spClothVars.get(), spClothVars["PerFrameCB"].get(), "gDirLight");
 
+    if (!sTextureSets.empty())
+    {
+        const auto &textureSet = sTextureSets[mUserParams.textureSet];
+        spClothVars->setTexture("gBaseColorMap", textureSet.BaseColorMap);
+        spClothVars->setTexture("gRoughnessMap", textureSet.RoughnessMap);
+        spClothVars->setTexture("gNormalMap", textureSet.NormalMap);
+    }
+
 	pRenderContext->setGraphicsVars(spClothVars);
 	pRenderContext->setGraphicsState(mpClothState);
 
@@ -255,6 +295,15 @@ void ClothModel::onGuiRender(ClothSample *pClothSample, SampleCallbacks *pSample
     pGui->addCheckBox("Show Surface Normals", mUserParams.bShowNormals);
     pGui->addCheckBox("Show Wind Effect", mUserParams.bShowWindEffect);
 	pGui->addCheckBox("Show Self Collisions", mUserParams.bShowSelfCollisions);
+
+    if (!sTextureSets.empty())
+    {
+        Gui::DropdownList textureSetDropdown;
+        for (uint32 textureSet = 0u; textureSet < sTextureSets.size(); ++textureSet)
+            textureSetDropdown.push_back({ textureSet, sTextureSets[textureSet].Name });
+        pGui->addDropdown("Texture Set", textureSetDropdown, reinterpret_cast<uint32&>(mUserParams.textureSet));
+    }
+
     pGui->addRgbColor("Base Color", mUserParams.baseColor);
 }
 
