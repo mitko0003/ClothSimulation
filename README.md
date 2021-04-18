@@ -1,5 +1,4 @@
 # Cloth Simulation
-==============
 
 Description:
 -----
